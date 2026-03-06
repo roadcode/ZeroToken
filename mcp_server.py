@@ -1,0 +1,405 @@
+"""
+ZeroToken MCP Server - Enhanced for AI Agent with structured operation records.
+Exposes browser automation tools via MCP protocol with detailed trajectory capture.
+"""
+
+import asyncio
+import json
+from typing import Any
+
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+
+from zerotoken.controller import BrowserController
+from zerotoken.trajectory import TrajectoryRecorder
+
+
+# 创建 MCP 服务器
+server = Server("zerotoken")
+
+# 全局状态
+_controller = None
+_trajectory_recorder = None
+_current_trajectory = None
+
+
+def get_controller() -> BrowserController:
+    """Get or create global browser controller."""
+    global _controller
+    if _controller is None:
+        _controller = BrowserController()
+    return _controller
+
+
+def get_trajectory_recorder() -> TrajectoryRecorder:
+    """Get or create global trajectory recorder."""
+    global _trajectory_recorder
+    if _trajectory_recorder is None:
+        _trajectory_recorder = TrajectoryRecorder()
+        _trajectory_recorder.bind_controller(get_controller())
+    return _trajectory_recorder
+
+
+# 定义可用工具
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    return [
+        Tool(
+            name="browser_open",
+            description="Open a URL in the browser and return detailed operation record",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to open"},
+                    "wait_until": {"type": "string", "description": "Wait condition (load, domcontentloaded, networkidle, commit)", "default": "networkidle"},
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation to trajectory", "default": True}
+                },
+                "required": ["url"]
+            }
+        ),
+        Tool(
+            name="browser_click",
+            description="Click an element and return detailed operation record with page state",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string", "description": "CSS selector of the element to click"},
+                    "timeout": {"type": "integer", "description": "Timeout in milliseconds", "default": 30000},
+                    "wait_after": {"type": "number", "description": "Seconds to wait after click", "default": 0.5},
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                },
+                "required": ["selector"]
+            }
+        ),
+        Tool(
+            name="browser_input",
+            description="Type text into an input field and return detailed operation record",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string", "description": "CSS selector of the input field"},
+                    "text": {"type": "string", "description": "Text to type"},
+                    "delay": {"type": "integer", "description": "Delay between keystrokes (ms)", "default": 50},
+                    "clear_first": {"type": "boolean", "description": "Clear existing value before typing", "default": True},
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                },
+                "required": ["selector", "text"]
+            }
+        ),
+        Tool(
+            name="browser_get_text",
+            description="Extract text or attribute from an element with detailed result",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string", "description": "CSS selector of the element"},
+                    "attr": {"type": "string", "description": "Attribute to extract (text, html, value, innerText)", "default": "text"},
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                },
+                "required": ["selector"]
+            }
+        ),
+        Tool(
+            name="browser_get_html",
+            description="Get HTML content of page or element",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "selector": {"type": "string", "description": "CSS selector (omit for full page HTML)"},
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                }
+            }
+        ),
+        Tool(
+            name="browser_screenshot",
+            description="Take a screenshot and return image data with page state",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to save the screenshot (optional)"},
+                    "full_page": {"type": "boolean", "description": "Capture full page", "default": False},
+                    "selector": {"type": "string", "description": "CSS selector to capture specific element"},
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                }
+            }
+        ),
+        Tool(
+            name="browser_wait_for",
+            description="Wait for a condition (selector, url, text, navigation)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "condition": {"type": "string", "description": "Type of condition (selector, url, text, navigation)"},
+                    "value": {"type": "string", "description": "Condition value"},
+                    "timeout": {"type": "integer", "description": "Timeout in milliseconds", "default": 30000},
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                },
+                "required": ["condition"]
+            }
+        ),
+        Tool(
+            name="browser_extract_data",
+            description="Extract structured data based on schema (AI-node capable)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "schema": {
+                        "type": "object",
+                        "description": "Data extraction schema",
+                        "properties": {
+                            "fields": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "selector": {"type": "string"},
+                                        "type": {"type": "string"}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "required": ["schema"]
+            }
+        ),
+        Tool(
+            name="trajectory_start",
+            description="Start a new trajectory recording for a task",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Unique task identifier"},
+                    "goal": {"type": "string", "description": "Natural language description of the task goal"}
+                },
+                "required": ["task_id", "goal"]
+            }
+        ),
+        Tool(
+            name="trajectory_complete",
+            description="Complete the current trajectory and get AI-ready prompt",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "export_for_ai": {"type": "boolean", "description": "Export trajectory in AI-optimized format", "default": True}
+                }
+            }
+        ),
+        Tool(
+            name="trajectory_get",
+            description="Get the current trajectory operations",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "format": {"type": "string", "description": "Output format (json, ai_prompt)", "default": "json"}
+                }
+            }
+        ),
+        Tool(
+            name="browser_init",
+            description="Initialize the browser (call once before using other browser tools)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "headless": {"type": "boolean", "description": "Run in headless mode", "default": True},
+                    "viewport_width": {"type": "integer", "description": "Viewport width", "default": 1920},
+                    "viewport_height": {"type": "integer", "description": "Viewport height", "default": 1080}
+                }
+            }
+        ),
+        Tool(
+            name="browser_close",
+            description="Close the browser and cleanup resources",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+    ]
+
+
+def _format_operation_record(record) -> str:
+    """Format operation record as JSON string."""
+    return json.dumps(record.to_dict(), indent=2, ensure_ascii=False)
+
+
+# 工具执行处理
+@server.call_tool()
+async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    global _current_trajectory
+
+    controller = get_controller()
+    recorder = get_trajectory_recorder()
+    record_trajectory = arguments.pop('record_trajectory', True)
+
+    try:
+        if name == "browser_init":
+            headless = arguments.get("headless", True)
+            viewport = {
+                "width": arguments.get("viewport_width", 1920),
+                "height": arguments.get("viewport_height", 1080)
+            }
+            await controller.start(headless=headless, viewport=viewport)
+            return [TextContent(
+                type="text",
+                text=json.dumps({
+                    "success": True,
+                    "message": "Browser initialized",
+                    "config": controller.get_config()
+                }, indent=2)
+            )]
+
+        elif name == "browser_close":
+            await controller.stop()
+            return [TextContent(
+                type="text",
+                text=json.dumps({"success": True, "message": "Browser closed"}, indent=2)
+            )]
+
+        elif name == "browser_open":
+            url = arguments["url"]
+            wait_until = arguments.get("wait_until", "networkidle")
+            record = await controller.open(url, wait_until=wait_until)
+            if record_trajectory:
+                recorder.record_operation(record)
+            return [TextContent(type="text", text=_format_operation_record(record))]
+
+        elif name == "browser_click":
+            selector = arguments["selector"]
+            timeout = arguments.get("timeout")
+            wait_after = arguments.get("wait_after", 0.5)
+            record = await controller.click(selector, timeout=timeout, wait_after=wait_after)
+            if record_trajectory:
+                recorder.record_operation(record)
+            return [TextContent(type="text", text=_format_operation_record(record))]
+
+        elif name == "browser_input":
+            selector = arguments["selector"]
+            text = arguments["text"]
+            delay = arguments.get("delay", 50)
+            clear_first = arguments.get("clear_first", True)
+            record = await controller.input(selector, text, delay=delay, clear_first=clear_first)
+            if record_trajectory:
+                recorder.record_operation(record)
+            return [TextContent(type="text", text=_format_operation_record(record))]
+
+        elif name == "browser_get_text":
+            selector = arguments["selector"]
+            attr = arguments.get("attr", "text")
+            record = await controller.get_text(selector, attr=attr)
+            if record_trajectory:
+                recorder.record_operation(record)
+            return [TextContent(type="text", text=_format_operation_record(record))]
+
+        elif name == "browser_get_html":
+            selector = arguments.get("selector")
+            record = await controller.get_html(selector=selector)
+            if record_trajectory:
+                recorder.record_operation(record)
+            return [TextContent(type="text", text=_format_operation_record(record))]
+
+        elif name == "browser_screenshot":
+            path = arguments.get("path")
+            full_page = arguments.get("full_page", False)
+            selector = arguments.get("selector")
+            record = await controller.screenshot(path=path, full_page=full_page, selector=selector)
+            if record_trajectory:
+                recorder.record_operation(record)
+            # Don't include full screenshot data in response (too large)
+            result = record.to_dict()
+            if result.get("screenshot"):
+                result["screenshot_preview"] = "base64 image data available"
+            return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "browser_wait_for":
+            condition = arguments["condition"]
+            value = arguments.get("value")
+            timeout = arguments.get("timeout")
+            record = await controller.wait_for(condition, value, timeout=timeout)
+            if record_trajectory:
+                recorder.record_operation(record)
+            return [TextContent(type="text", text=_format_operation_record(record))]
+
+        elif name == "browser_extract_data":
+            schema = arguments["schema"]
+            record = await controller.extract_data(schema)
+            recorder.record_operation(record)
+            return [TextContent(type="text", text=_format_operation_record(record))]
+
+        elif name == "trajectory_start":
+            task_id = arguments["task_id"]
+            goal = arguments["goal"]
+            trajectory = recorder.start_trajectory(task_id, goal)
+            return [TextContent(
+                type="text",
+                text=json.dumps({
+                    "success": True,
+                    "task_id": task_id,
+                    "goal": goal,
+                    "message": "Trajectory recording started"
+                }, indent=2)
+            )]
+
+        elif name == "trajectory_complete":
+            export_for_ai = arguments.get("export_for_ai", True)
+            trajectory = recorder.complete_trajectory()
+            if trajectory:
+                if export_for_ai:
+                    ai_prompt = trajectory.to_ai_prompt_format()
+                    return [TextContent(
+                        type="text",
+                        text=json.dumps({
+                            "success": True,
+                            "task_id": trajectory.task_id,
+                            "operations_count": len(trajectory.operations),
+                            "ai_prompt": ai_prompt
+                        }, indent=2)
+                    )]
+                return [TextContent(
+                    type="text",
+                    text=json.dumps({
+                        "success": True,
+                        "task_id": trajectory.task_id,
+                        "operations_count": len(trajectory.operations),
+                        "trajectory": trajectory.to_dict()
+                    }, indent=2)
+                )]
+            return [TextContent(
+                type="text",
+                text=json.dumps({"success": False, "error": "No active trajectory"}, indent=2)
+            )]
+
+        elif name == "trajectory_get":
+            fmt = arguments.get("format", "json")
+            trajectory = recorder.get_current_trajectory()
+            if trajectory:
+                if fmt == "ai_prompt":
+                    return [TextContent(type="text", text=trajectory.to_ai_prompt_format())]
+                else:
+                    return [TextContent(type="text", text=json.dumps(trajectory.to_dict(), indent=2))]
+            return [TextContent(
+                type="text",
+                text=json.dumps({"success": False, "error": "No active trajectory"}, indent=2)
+            )]
+
+        else:
+            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}, indent=2))]
+
+
+async def main():
+    """Run the MCP server"""
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options()
+        )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
