@@ -690,7 +690,9 @@ class BrowserController:
     async def extract_data(
         self,
         schema: Dict[str, Any],
-        take_screenshot: bool = True
+        take_screenshot: bool = True,
+        fuzzy_reason: Optional[str] = None,
+        fuzzy_hint: Optional[str] = None
     ) -> OperationRecord:
         """
         Extract structured data based on schema.
@@ -759,6 +761,11 @@ class BrowserController:
             result = {"success": False, "error": str(e)}
             error = str(e)
 
+        fuzzy_point = {
+            "requires_judgment": True,
+            "reason": fuzzy_reason or "需根据 schema 提取可变内容",
+            "hint": fuzzy_hint
+        }
         record = OperationRecord(
             step=step,
             action="extract_data",
@@ -766,9 +773,9 @@ class BrowserController:
             result=result,
             page_state=page_state,
             screenshot=screenshot,
-            error=error
+            error=error,
+            fuzzy_point=fuzzy_point
         )
-        # Mark as AI-node capable
         record.result["ai_node"] = True
         self._operation_history.append(record)
         return record

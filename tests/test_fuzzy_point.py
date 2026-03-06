@@ -54,3 +54,35 @@ class TestOperationRecordFuzzyPoint:
         )
         d = record.to_dict()
         assert "fuzzy_point" not in d
+
+    def test_extract_data_fuzzy_reason_override(self):
+        """Test extract_data with fuzzy_reason override (via controller)."""
+        from unittest.mock import AsyncMock, MagicMock
+        from zerotoken.controller import BrowserController
+
+        BrowserController._instance = None
+        controller = MagicMock(spec=BrowserController)
+        controller._step_counter = 0
+        controller._operation_history = []
+        controller._config = {}
+        controller._page = AsyncMock()
+        controller._page.url = "https://example.com"
+        controller._page.title = AsyncMock(return_value="Example")
+        controller._page.screenshot = AsyncMock(return_value=b"x")
+        mock_el = AsyncMock()
+        mock_el.text_content = AsyncMock(return_value="test")
+        controller._page.wait_for_selector = AsyncMock(return_value=mock_el)
+        controller._get_page_state = AsyncMock(
+            return_value=PageState("https://a.com", "Title")
+        )
+        controller._take_screenshot = AsyncMock(return_value=None)
+        controller._next_step = lambda: 1
+
+        import asyncio
+        from zerotoken.controller import BrowserController as BC
+        real_extract = BC.extract_data.__get__(controller, BC)
+        record = asyncio.run(real_extract(
+            controller, {"fields": [{"name": "t", "selector": "h1", "type": "text"}]},
+            fuzzy_reason="验证码需识别"
+        ))
+        assert record.fuzzy_point["reason"] == "验证码需识别"
