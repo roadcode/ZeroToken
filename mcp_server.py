@@ -57,7 +57,8 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "url": {"type": "string", "description": "The URL to open"},
                     "wait_until": {"type": "string", "description": "Wait condition (load, domcontentloaded, networkidle, commit)", "default": "networkidle"},
-                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation to trajectory", "default": True}
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation to trajectory", "default": True},
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True}
                 },
                 "required": ["url"]
             }
@@ -71,7 +72,8 @@ async def list_tools() -> list[Tool]:
                     "selector": {"type": "string", "description": "CSS selector of the element to click"},
                     "timeout": {"type": "integer", "description": "Timeout in milliseconds", "default": 30000},
                     "wait_after": {"type": "number", "description": "Seconds to wait after click", "default": 0.5},
-                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True},
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True}
                 },
                 "required": ["selector"]
             }
@@ -99,7 +101,8 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "selector": {"type": "string", "description": "CSS selector of the element"},
                     "attr": {"type": "string", "description": "Attribute to extract (text, html, value, innerText)", "default": "text"},
-                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True},
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True}
                 },
                 "required": ["selector"]
             }
@@ -111,7 +114,8 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "selector": {"type": "string", "description": "CSS selector (omit for full page HTML)"},
-                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True},
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True}
                 }
             }
         ),
@@ -137,7 +141,8 @@ async def list_tools() -> list[Tool]:
                     "condition": {"type": "string", "description": "Type of condition (selector, url, text, navigation)"},
                     "value": {"type": "string", "description": "Condition value"},
                     "timeout": {"type": "integer", "description": "Timeout in milliseconds", "default": 30000},
-                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True},
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True}
                 },
                 "required": ["condition"]
             }
@@ -164,7 +169,8 @@ async def list_tools() -> list[Tool]:
                                 }
                             }
                         }
-                    }
+                    },
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True}
                 },
                 "required": ["schema"]
             }
@@ -225,6 +231,17 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="trajectory_delete",
+            description="Delete saved trajectories by task_id to avoid too many records",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID of the trajectory to delete"}
+                },
+                "required": ["task_id"]
+            }
+        ),
+        Tool(
             name="browser_init",
             description="Initialize the browser (call once before using other browser tools)",
             inputSchema={
@@ -247,9 +264,26 @@ async def list_tools() -> list[Tool]:
     ]
 
 
-def _format_operation_record(record) -> str:
-    """Format operation record as JSON string."""
-    return json.dumps(record.to_dict(), indent=2, ensure_ascii=False)
+def _error_response(
+    error: str,
+    code: str | None = None,
+    retryable: bool | None = None
+) -> str:
+    """Build structured error JSON for MCP tools."""
+    out = {"success": False, "error": error}
+    if code is not None:
+        out["code"] = code
+    if retryable is not None:
+        out["retryable"] = retryable
+    return json.dumps(out, indent=2, ensure_ascii=False)
+
+
+def _format_operation_record(record, include_screenshot: bool = True) -> str:
+    """Format operation record as JSON string. If include_screenshot is False, omit screenshot to reduce payload."""
+    d = record.to_dict()
+    if not include_screenshot:
+        d.pop("screenshot", None)
+    return json.dumps(d, indent=2, ensure_ascii=False)
 
 
 # 工具执行处理
@@ -259,7 +293,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
     controller = get_controller()
     recorder = get_trajectory_recorder()
-    record_trajectory = arguments.pop('record_trajectory', True)
+    record_trajectory = arguments.pop("record_trajectory", True)
+    include_screenshot = arguments.pop("include_screenshot", True)
 
     try:
         if name == "browser_init":
@@ -292,7 +327,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
-            return [TextContent(type="text", text=_format_operation_record(record))]
+            return [TextContent(
+                type="text",
+                text=_format_operation_record(record, include_screenshot)
+            )]
 
         elif name == "browser_click":
             selector = arguments["selector"]
@@ -302,7 +340,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
-            return [TextContent(type="text", text=_format_operation_record(record))]
+            return [TextContent(
+                type="text",
+                text=_format_operation_record(record, include_screenshot)
+            )]
 
         elif name == "browser_input":
             selector = arguments["selector"]
@@ -313,7 +354,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
-            return [TextContent(type="text", text=_format_operation_record(record))]
+            return [TextContent(
+                type="text",
+                text=_format_operation_record(record, include_screenshot)
+            )]
 
         elif name == "browser_get_text":
             selector = arguments["selector"]
@@ -322,7 +366,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
-            return [TextContent(type="text", text=_format_operation_record(record))]
+            return [TextContent(
+                type="text",
+                text=_format_operation_record(record, include_screenshot)
+            )]
 
         elif name == "browser_get_html":
             selector = arguments.get("selector")
@@ -330,7 +377,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
-            return [TextContent(type="text", text=_format_operation_record(record))]
+            return [TextContent(
+                type="text",
+                text=_format_operation_record(record, include_screenshot)
+            )]
 
         elif name == "browser_screenshot":
             path = arguments.get("path")
@@ -354,14 +404,20 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
-            return [TextContent(type="text", text=_format_operation_record(record))]
+            return [TextContent(
+                type="text",
+                text=_format_operation_record(record, include_screenshot)
+            )]
 
         elif name == "browser_extract_data":
             schema = arguments["schema"]
             record = await controller.extract_data(schema)
             recorder.ensure_current_trajectory()
             recorder.record_operation(record)
-            return [TextContent(type="text", text=_format_operation_record(record))]
+            return [TextContent(
+                type="text",
+                text=_format_operation_record(record, include_screenshot)
+            )]
 
         elif name == "trajectory_start":
             task_id = arguments["task_id"]
@@ -404,7 +460,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 )]
             return [TextContent(
                 type="text",
-                text=json.dumps({"success": False, "error": "No active trajectory"}, indent=2)
+                text=_error_response("No active trajectory", code="NO_ACTIVE_TRAJECTORY", retryable=False)
             )]
 
         elif name == "trajectory_get":
@@ -417,7 +473,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     return [TextContent(type="text", text=json.dumps(trajectory.to_dict(), indent=2))]
             return [TextContent(
                 type="text",
-                text=json.dumps({"success": False, "error": "No active trajectory"}, indent=2)
+                text=_error_response("No active trajectory", code="NO_ACTIVE_TRAJECTORY", retryable=False)
             )]
 
         elif name == "trajectory_list":
@@ -438,13 +494,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             if not task_id:
                 return [TextContent(
                     type="text",
-                    text=json.dumps({"success": False, "error": "task_id is required"}, indent=2)
+                    text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False)
                 )]
             traj = recorder.load_trajectory_by_task_id(task_id)
             if traj is None:
                 return [TextContent(
                     type="text",
-                    text=json.dumps({"success": False, "error": f"No saved trajectory for task_id: {task_id}"}, indent=2)
+                    text=_error_response(f"No saved trajectory for task_id: {task_id}", code="TRAJECTORY_NOT_FOUND", retryable=False)
                 )]
             if fmt == "ai_prompt":
                 return [TextContent(
@@ -456,11 +512,41 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 text=json.dumps({"success": True, "trajectory": traj.to_dict()}, indent=2, ensure_ascii=False)
             )]
 
+        elif name == "trajectory_delete":
+            task_id = arguments.get("task_id")
+            if not task_id:
+                return [TextContent(
+                    type="text",
+                    text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False)
+                )]
+            deleted = recorder.delete_trajectory(task_id)
+            return [TextContent(
+                type="text",
+                text=json.dumps({"success": True, "deleted": deleted}, indent=2)
+            )]
+
         else:
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+            return [TextContent(
+                type="text",
+                text=_error_response(f"Unknown tool: {name}", code="UNKNOWN_TOOL", retryable=False)
+            )]
 
     except Exception as e:
-        return [TextContent(type="text", text=json.dumps({"error": str(e)}, indent=2))]
+        err_msg = str(e)
+        code = "INTERNAL_ERROR"
+        retryable = False
+        if "Timeout" in err_msg or "timeout" in err_msg.lower():
+            code = "TIMEOUT"
+            retryable = True
+        if "Target closed" in err_msg or "browser" in err_msg.lower() and "closed" in err_msg.lower():
+            code = "BROWSER_NOT_INIT"
+            retryable = False
+        if "not found" in err_msg.lower() or "selector" in err_msg.lower():
+            retryable = True
+        return [TextContent(
+            type="text",
+            text=_error_response(err_msg, code=code, retryable=retryable)
+        )]
 
 
 async def main():

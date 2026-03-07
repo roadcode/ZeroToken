@@ -132,14 +132,9 @@ AI Agent (ReAct 模式)
 ### Browser Tools
 - `browser_init` - 初始化浏览器
 - `browser_close` - 关闭浏览器
-- `browser_open` - 打开 URL
-- `browser_click` - 点击元素
-- `browser_input` - 输入文本
-- `browser_get_text` - 提取文本
-- `browser_get_html` - 提取 HTML
+- `browser_open` / `browser_click` / `browser_input` / `browser_get_text` / `browser_get_html` / `browser_wait_for` / `browser_extract_data` - 原子操作，返回 OperationRecord
+- 上述返回 record 的工具支持可选参数 **include_screenshot**（默认 true）；设为 false 时响应中不包含截图，可减少 token
 - `browser_screenshot` - 截图
-- `browser_wait_for` - 等待条件
-- `browser_extract_data` - 结构化数据提取
 
 ### Trajectory Tools
 - `trajectory_start` - 开始轨迹记录
@@ -147,6 +142,7 @@ AI Agent (ReAct 模式)
 - `trajectory_get` - 获取当前未结束轨迹（format: json | ai_prompt）
 - `trajectory_list` - 列出已保存轨迹（可选 limit、since），返回 task_id、goal、operations_count、file、saved_at
 - `trajectory_load` - 按 task_id 加载已保存轨迹（format: ai_prompt | json），供 Skill 生成脚本等使用
+- `trajectory_delete` - 按 task_id 删除已保存轨迹，防止记录过多；建议先 `trajectory_list` 再对不需要的 task_id 调用
 
 ## 使用示例
 
@@ -179,12 +175,17 @@ load_result = await mcp_call("trajectory_load", {"task_id": "login_demo", "forma
 # load_result["ai_prompt"] 或 load_result["trajectory"]（format=json 时）
 ```
 
+## 错误响应格式
+
+工具失败时统一返回 JSON：`success: false`、`error`（必填）、可选 `code`（机器可读，如 INVALID_PARAMS、TRAJECTORY_NOT_FOUND、NO_ACTIVE_TRAJECTORY、TIMEOUT、UNKNOWN_TOOL）、可选 `retryable`（bool，是否建议重试）。模型可根据 `code` 与 `retryable` 决定是否重试或提示用户。
+
 ## 注意事项
 
 - 不要使用 emoji（编码问题）
 - 所有回答使用中文
 - BrowserController 必须保持单例
-- 截图数据较大，MCP 响应中可简化处理
+- 截图数据较大时，可传 `include_screenshot: false` 减少响应体积；轨迹仍会完整记录
+- 建议通过 `trajectory_list` 查看已保存轨迹，对不需要的 `task_id` 调用 `trajectory_delete`，避免本地记录过多
 
 ## 扩展方向
 
