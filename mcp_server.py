@@ -5,6 +5,7 @@ Exposes browser automation tools via MCP protocol with detailed trajectory captu
 
 import asyncio
 import json
+import os
 from typing import Any
 
 from mcp.server import Server
@@ -36,7 +37,10 @@ def get_trajectory_recorder() -> TrajectoryRecorder:
     """Get or create global trajectory recorder."""
     global _trajectory_recorder
     if _trajectory_recorder is None:
-        _trajectory_recorder = TrajectoryRecorder()
+        # 使用 mcp_server.py 所在目录下的 trajectories，避免 MCP 子进程 cwd 不是项目根导致轨迹存到别处
+        _base_dir = os.path.dirname(os.path.abspath(__file__))
+        _trajectories_dir = os.path.join(_base_dir, "trajectories")
+        _trajectory_recorder = TrajectoryRecorder(trajectories_dir=_trajectories_dir)
         _trajectory_recorder.bind_controller(get_controller())
     return _trajectory_recorder
 
@@ -195,6 +199,29 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "format": {"type": "string", "description": "Output format (json, ai_prompt)", "default": "json"}
                 }
+            }
+        ),
+        Tool(
+            name="trajectory_list",
+            description="List saved trajectories (for later loading via trajectory_load)",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Max number of trajectories to return", "default": 20},
+                    "since": {"type": "number", "description": "Optional: only return trajectories saved at or after this Unix timestamp"}
+                }
+            }
+        ),
+        Tool(
+            name="trajectory_load",
+            description="Load a saved trajectory by task_id for script generation or analysis",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID of the saved trajectory"},
+                    "format": {"type": "string", "description": "Output format: ai_prompt or json", "default": "ai_prompt", "enum": ["ai_prompt", "json"]}
+                },
+                "required": ["task_id"]
             }
         ),
         Tool(
@@ -391,6 +418,42 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(
                 type="text",
                 text=json.dumps({"success": False, "error": "No active trajectory"}, indent=2)
+            )]
+
+        elif name == "trajectory_list":
+            limit = arguments.get("limit", 20)
+            since = arguments.get("since")
+            items = recorder.list_trajectories()
+            if since is not None:
+                items = [t for t in items if t.get("saved_at", 0) >= since]
+            items = items[:limit]
+            return [TextContent(
+                type="text",
+                text=json.dumps({"trajectories": items}, indent=2, ensure_ascii=False)
+            )]
+
+        elif name == "trajectory_load":
+            task_id = arguments.get("task_id")
+            fmt = arguments.get("format", "ai_prompt")
+            if not task_id:
+                return [TextContent(
+                    type="text",
+                    text=json.dumps({"success": False, "error": "task_id is required"}, indent=2)
+                )]
+            traj = recorder.load_trajectory_by_task_id(task_id)
+            if traj is None:
+                return [TextContent(
+                    type="text",
+                    text=json.dumps({"success": False, "error": f"No saved trajectory for task_id: {task_id}"}, indent=2)
+                )]
+            if fmt == "ai_prompt":
+                return [TextContent(
+                    type="text",
+                    text=json.dumps({"success": True, "ai_prompt": traj.to_ai_prompt_format()}, indent=2, ensure_ascii=False)
+                )]
+            return [TextContent(
+                type="text",
+                text=json.dumps({"success": True, "trajectory": traj.to_dict()}, indent=2, ensure_ascii=False)
             )]
 
         else:
