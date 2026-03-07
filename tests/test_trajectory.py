@@ -360,6 +360,7 @@ class TestTrajectoryRecorder:
 
         assert len(trajectories) == 1
         assert trajectories[0]["task_id"] == "test_001"
+        assert trajectories[0]["operations_count"] == 1
 
     def test_delete_trajectory(self, recorder, tmp_path):
         """Test deleting trajectory."""

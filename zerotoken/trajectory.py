@@ -52,6 +52,29 @@ class Trajectory:
             "operations": self.operations
         }
 
+    def to_ai_prompt_format(self) -> str:
+        """
+        Export trajectory as AI-friendly text format.
+        Steps with fuzzy_point are marked with [需判断: {reason}].
+        """
+        lines = [f"Task Goal: {self.goal}", "", "Operation History:"]
+        for op in self.operations:
+            step = op.get("step", 0)
+            action = op.get("action", "")
+            params = op.get("params", {})
+            param_str = ", ".join(f"{k}={repr(v)}" for k, v in params.items())
+            line = f"[Step {step}] {action}({param_str})"
+            fp = op.get("fuzzy_point")
+            if fp and fp.get("requires_judgment"):
+                reason = fp.get("reason", "需AI/人判断")
+                hint = fp.get("hint", "")
+                if hint:
+                    line += f" [需判断: {reason}; 提示: {hint}]"
+                else:
+                    line += f" [需判断: {reason}]"
+            lines.append(line)
+        return "\n".join(lines)
+
 
 class TrajectoryRecorder:
     """
@@ -204,7 +227,8 @@ class TrajectoryRecorder:
                     "task_id": data['task_id'],
                     "goal": data['goal'],
                     "file": str(f),
-                    "saved_at": f.stat().st_mtime
+                    "saved_at": f.stat().st_mtime,
+                    "operations_count": len(data.get("operations", []))
                 })
         return sorted(trajectories, key=lambda x: x['saved_at'], reverse=True)
 
