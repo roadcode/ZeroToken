@@ -263,6 +263,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             wait_until = arguments.get("wait_until", "networkidle")
             record = await controller.open(url, wait_until=wait_until)
             if record_trajectory:
+                recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
             return [TextContent(type="text", text=_format_operation_record(record))]
 
@@ -272,6 +273,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             wait_after = arguments.get("wait_after", 0.5)
             record = await controller.click(selector, timeout=timeout, wait_after=wait_after)
             if record_trajectory:
+                recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
             return [TextContent(type="text", text=_format_operation_record(record))]
 
@@ -282,6 +284,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             clear_first = arguments.get("clear_first", True)
             record = await controller.input(selector, text, delay=delay, clear_first=clear_first)
             if record_trajectory:
+                recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
             return [TextContent(type="text", text=_format_operation_record(record))]
 
@@ -290,6 +293,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             attr = arguments.get("attr", "text")
             record = await controller.get_text(selector, attr=attr)
             if record_trajectory:
+                recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
             return [TextContent(type="text", text=_format_operation_record(record))]
 
@@ -297,6 +301,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             selector = arguments.get("selector")
             record = await controller.get_html(selector=selector)
             if record_trajectory:
+                recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
             return [TextContent(type="text", text=_format_operation_record(record))]
 
@@ -306,6 +311,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             selector = arguments.get("selector")
             record = await controller.screenshot(path=path, full_page=full_page, selector=selector)
             if record_trajectory:
+                recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
             # Don't include full screenshot data in response (too large)
             result = record.to_dict()
@@ -319,12 +325,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             timeout = arguments.get("timeout")
             record = await controller.wait_for(condition, value, timeout=timeout)
             if record_trajectory:
+                recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
             return [TextContent(type="text", text=_format_operation_record(record))]
 
         elif name == "browser_extract_data":
             schema = arguments["schema"]
             record = await controller.extract_data(schema)
+            recorder.ensure_current_trajectory()
             recorder.record_operation(record)
             return [TextContent(type="text", text=_format_operation_record(record))]
 
@@ -346,8 +354,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             export_for_ai = arguments.get("export_for_ai", True)
             trajectory = recorder.complete_trajectory()
             if trajectory:
+                recorder.save_trajectory()
                 if export_for_ai:
-                    ai_prompt = trajectory.to_ai_prompt_format()
+                    ai_prompt = recorder.export_for_ai(trajectory.task_id)
                     return [TextContent(
                         type="text",
                         text=json.dumps({
