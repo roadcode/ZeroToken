@@ -93,6 +93,13 @@ class TrajectoryRecorder:
 
         return self._current_trajectory
 
+    def ensure_current_trajectory(self) -> None:
+        """若无当前轨迹则创建隐式轨迹（不清理 controller history）。"""
+        if self._current_trajectory is not None:
+            return
+        task_id = "_implicit_" + datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._current_trajectory = Trajectory(task_id, "未命名会话")
+
     def record_operation(self, record: OperationRecord) -> None:
         """Record an operation to current trajectory."""
         if self._current_trajectory:
@@ -146,8 +153,7 @@ class TrajectoryRecorder:
             result=data['result'],
             page_state=page_state,
             screenshot=data.get('screenshot'),
-            error=data.get('error'),
-            fuzzy_point=data.get('fuzzy_point')
+            error=data.get('error')
         )
 
     def save_trajectory(self, trajectory: Optional[Trajectory] = None) -> str:
