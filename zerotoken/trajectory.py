@@ -217,6 +217,17 @@ class TrajectoryRecorder:
 
         return trajectory
 
+    def load_trajectory_by_task_id(self, task_id: str) -> Optional[Trajectory]:
+        """Load the most recently saved trajectory for the given task_id. Returns None if none found."""
+        files = sorted(
+            self.trajectories_dir.glob(f"{task_id}_*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True
+        )
+        if not files:
+            return None
+        return self.load_trajectory(str(files[0]))
+
     def list_trajectories(self) -> List[Dict[str, Any]]:
         """List all saved trajectories."""
         trajectories = []

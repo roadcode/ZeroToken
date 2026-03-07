@@ -405,6 +405,31 @@ class TestTrajectoryRecorder:
         assert loaded.goal == "Test goal"
         assert len(loaded.operations) == 1
 
+    def test_load_trajectory_by_task_id_nonexistent(self, recorder):
+        """load_trajectory_by_task_id 对不存在的 task_id 返回 None"""
+        assert recorder.load_trajectory_by_task_id("nonexistent_id") is None
+
+    def test_load_trajectory_by_task_id_success(self, recorder, tmp_path):
+        """load_trajectory_by_task_id 能加载已保存的轨迹并返回 Trajectory"""
+        recorder.start_trajectory(task_id="task_abc", goal="Test goal")
+        page_state = PageState(url="https://example.com", title="Example")
+        record = OperationRecord(
+            step=1,
+            action="open",
+            params={"url": "https://example.com"},
+            result={"success": True},
+            page_state=page_state
+        )
+        recorder.record_operation(record)
+        recorder.save_trajectory()
+
+        loaded = recorder.load_trajectory_by_task_id("task_abc")
+        assert loaded is not None
+        assert loaded.task_id == "task_abc"
+        assert loaded.goal == "Test goal"
+        assert len(loaded.operations) == 1
+        assert "Task Goal" in loaded.to_ai_prompt_format()
+
     def test_dict_to_record(self, recorder):
         """Test converting dict to OperationRecord."""
         data = {
