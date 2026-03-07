@@ -85,6 +85,8 @@ class TrajectoryRecorder:
         Returns:
             The new Trajectory object
         """
+        if self._current_trajectory is not None and self._current_trajectory.task_id.startswith("_implicit_"):
+            self.complete_trajectory()
         self._current_trajectory = Trajectory(task_id, goal)
 
         # Clear controller history if bound

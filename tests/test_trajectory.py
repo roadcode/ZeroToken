@@ -181,6 +181,21 @@ class TestTrajectoryRecorder:
         assert first is second
         assert second.task_id == "t1"
 
+    def test_start_trajectory_completes_implicit_first(self, recorder):
+        """调用 start_trajectory 时若当前为隐式轨迹则先 complete 再开新轨迹"""
+        recorder.ensure_current_trajectory()
+        page_state = PageState(url="https://x.com", title="X")
+        record = OperationRecord(
+            step=1, action="open", params={}, result={"success": True}, page_state=page_state
+        )
+        recorder.record_operation(record)
+        recorder.start_trajectory("named", "named goal")
+        current = recorder.get_current_trajectory()
+        assert current is not None
+        assert current.task_id == "named"
+        assert current.goal == "named goal"
+        assert len(current.operations) == 0
+
     def test_start_trajectory_clears_controller_history(self, recorder, controller):
         """Test starting trajectory clears controller history."""
         recorder.bind_controller(controller)
