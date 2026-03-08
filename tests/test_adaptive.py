@@ -107,3 +107,35 @@ async def test_relocate_finds_element_when_stored(tmp_path):
         handle = await relocate(page, "example.com", "#link1", storage, threshold=0.3)
         await browser.close()
     assert handle is not None
+
+
+@pytest.mark.asyncio
+async def test_controller_adaptive_flow(tmp_path):
+    """Integration: Controller click with auto_save then adaptive after HTML change."""
+    from zerotoken.controller import BrowserController
+    from zerotoken.adaptive_storage import AdaptiveStorage
+
+    storage = AdaptiveStorage(db_path=str(tmp_path / "ctrl.db"))
+    controller = BrowserController()
+    controller._config["enable_adaptive"] = True
+    controller._config["adaptive_storage_path"] = str(tmp_path / "ctrl.db")
+    controller._adaptive_storage = storage
+
+    await controller.start(headless=True)
+    try:
+        await controller._page.set_content(
+            "<!DOCTYPE html><html><body><button id='submit'>Submit</button></body></html>"
+        )
+        record1 = await controller.click("#submit", auto_save=True)
+        assert record1.result.get("success") is True
+        domain = "default"
+        assert storage.load(domain, "#submit") is not None
+
+        await controller._page.set_content(
+            "<!DOCTYPE html><html><body><button class='btn-primary' data-action='submit'>Submit</button></body></html>"
+        )
+        record2 = await controller.click("#submit", adaptive=True)
+        assert record2.result.get("success") is True
+        assert record2.result.get("adaptive_used") is True
+    finally:
+        await controller.stop()

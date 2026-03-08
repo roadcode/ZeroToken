@@ -134,6 +134,7 @@ AI Agent (ReAct 模式)
 - `browser_close` - 关闭浏览器
 - `browser_open` / `browser_click` / `browser_input` / `browser_get_text` / `browser_get_html` / `browser_wait_for` / `browser_extract_data` - 原子操作，返回 OperationRecord
 - 上述返回 record 的工具支持可选参数 **include_screenshot**（默认 true）；设为 false 时响应中不包含截图，可减少 token
+- **自适应元素定位**：`browser_click`、`browser_input`、`browser_get_text`、`browser_get_html` 支持可选参数 **auto_save**（默认 false）、**adaptive**（默认 false）、**identifier**（可选）。首次选择器命中时传 `auto_save: true` 可保存元素指纹；改版后选择器失效时传 `adaptive: true` 可按指纹相似度自动重定位，无需改代码。
 - `browser_screenshot` - 截图
 
 ### Trajectory Tools
@@ -186,6 +187,7 @@ load_result = await mcp_call("trajectory_load", {"task_id": "login_demo", "forma
 - BrowserController 必须保持单例
 - 截图数据较大时，可传 `include_screenshot: false` 减少响应体积；轨迹仍会完整记录
 - 建议通过 `trajectory_list` 查看已保存轨迹，对不需要的 `task_id` 调用 `trajectory_delete`，避免本地记录过多
+- 自适应定位：对关键元素首次操作时传 `auto_save: true`，网站改版后同一选择器失效时传 `adaptive: true` 可自动按指纹重定位；指纹存于本地 SQLite（默认 `zerotoken_adaptive.db`）
 
 ## 扩展方向
 
