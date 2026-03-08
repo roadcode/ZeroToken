@@ -73,7 +73,10 @@ async def list_tools() -> list[Tool]:
                     "timeout": {"type": "integer", "description": "Timeout in milliseconds", "default": 30000},
                     "wait_after": {"type": "number", "description": "Seconds to wait after click", "default": 0.5},
                     "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True},
-                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True}
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True},
+                    "auto_save": {"type": "boolean", "description": "Save element fingerprint for adaptive relocation when selector works", "default": False},
+                    "adaptive": {"type": "boolean", "description": "If selector fails, relocate element by stored fingerprint", "default": False},
+                    "identifier": {"type": "string", "description": "Optional key for stored fingerprint (default: selector)"}
                 },
                 "required": ["selector"]
             }
@@ -88,7 +91,11 @@ async def list_tools() -> list[Tool]:
                     "text": {"type": "string", "description": "Text to type"},
                     "delay": {"type": "integer", "description": "Delay between keystrokes (ms)", "default": 50},
                     "clear_first": {"type": "boolean", "description": "Clear existing value before typing", "default": True},
-                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True}
+                    "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True},
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True},
+                    "auto_save": {"type": "boolean", "description": "Save element fingerprint for adaptive relocation", "default": False},
+                    "adaptive": {"type": "boolean", "description": "If selector fails, relocate by stored fingerprint", "default": False},
+                    "identifier": {"type": "string", "description": "Optional key for stored fingerprint (default: selector)"}
                 },
                 "required": ["selector", "text"]
             }
@@ -102,7 +109,10 @@ async def list_tools() -> list[Tool]:
                     "selector": {"type": "string", "description": "CSS selector of the element"},
                     "attr": {"type": "string", "description": "Attribute to extract (text, html, value, innerText)", "default": "text"},
                     "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True},
-                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True}
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True},
+                    "auto_save": {"type": "boolean", "description": "Save element fingerprint for adaptive relocation", "default": False},
+                    "adaptive": {"type": "boolean", "description": "If selector fails, relocate by stored fingerprint", "default": False},
+                    "identifier": {"type": "string", "description": "Optional key for stored fingerprint (default: selector)"}
                 },
                 "required": ["selector"]
             }
@@ -115,7 +125,10 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "selector": {"type": "string", "description": "CSS selector (omit for full page HTML)"},
                     "record_trajectory": {"type": "boolean", "description": "Whether to record this operation", "default": True},
-                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True}
+                    "include_screenshot": {"type": "boolean", "description": "Include screenshot in response (set false to reduce token)", "default": True},
+                    "auto_save": {"type": "boolean", "description": "Save element fingerprint for adaptive relocation (when selector set)", "default": False},
+                    "adaptive": {"type": "boolean", "description": "If selector fails, relocate by stored fingerprint", "default": False},
+                    "identifier": {"type": "string", "description": "Optional key for stored fingerprint (default: selector)"}
                 }
             }
         ),
@@ -336,7 +349,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             selector = arguments["selector"]
             timeout = arguments.get("timeout")
             wait_after = arguments.get("wait_after", 0.5)
-            record = await controller.click(selector, timeout=timeout, wait_after=wait_after)
+            auto_save = arguments.get("auto_save", False)
+            adaptive = arguments.get("adaptive", False)
+            identifier = arguments.get("identifier")
+            record = await controller.click(
+                selector, timeout=timeout, wait_after=wait_after,
+                auto_save=auto_save, adaptive=adaptive, identifier=identifier
+            )
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
@@ -350,7 +369,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             text = arguments["text"]
             delay = arguments.get("delay", 50)
             clear_first = arguments.get("clear_first", True)
-            record = await controller.input(selector, text, delay=delay, clear_first=clear_first)
+            auto_save = arguments.get("auto_save", False)
+            adaptive = arguments.get("adaptive", False)
+            identifier = arguments.get("identifier")
+            record = await controller.input(
+                selector, text, delay=delay, clear_first=clear_first,
+                auto_save=auto_save, adaptive=adaptive, identifier=identifier
+            )
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
@@ -362,7 +387,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         elif name == "browser_get_text":
             selector = arguments["selector"]
             attr = arguments.get("attr", "text")
-            record = await controller.get_text(selector, attr=attr)
+            auto_save = arguments.get("auto_save", False)
+            adaptive = arguments.get("adaptive", False)
+            identifier = arguments.get("identifier")
+            record = await controller.get_text(
+                selector, attr=attr,
+                auto_save=auto_save, adaptive=adaptive, identifier=identifier
+            )
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
@@ -373,7 +404,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         elif name == "browser_get_html":
             selector = arguments.get("selector")
-            record = await controller.get_html(selector=selector)
+            auto_save = arguments.get("auto_save", False)
+            adaptive = arguments.get("adaptive", False)
+            identifier = arguments.get("identifier")
+            record = await controller.get_html(
+                selector=selector,
+                auto_save=auto_save, adaptive=adaptive, identifier=identifier
+            )
             if record_trajectory:
                 recorder.ensure_current_trajectory()
                 recorder.record_operation(record)
