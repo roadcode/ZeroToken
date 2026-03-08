@@ -1,8 +1,8 @@
-"""Tests for adaptive fingerprint extraction."""
+"""Tests for adaptive fingerprint extraction and similarity."""
 
 import pytest
 
-from zerotoken.adaptive import extract_fingerprint
+from zerotoken.adaptive import extract_fingerprint, similarity_score, relocate
 
 # Minimal HTML for fingerprint extraction
 SAMPLE_HTML = """
@@ -45,3 +45,65 @@ async def test_extract_fingerprint_structure():
     assert isinstance(fp["self"]["siblings"], list)
     assert isinstance(fp["self"]["path"], list)
     assert "article" in fp["self"]["path"]
+
+
+def test_similarity_score_identical():
+    fp = {"parent": {"tag": "div", "attrs": {"class": "x"}, "text": "a"}, "self": {"tag": "a", "attrs": {"id": "i1"}, "text": "Link", "siblings": ["span"], "path": ["div", "a"]}}
+    assert similarity_score(fp, fp) == 1.0
+
+
+def test_similarity_score_different_tag():
+    fp1 = {"parent": {"tag": "div", "attrs": {}, "text": ""}, "self": {"tag": "a", "attrs": {}, "text": "x", "siblings": [], "path": ["a"]}}
+    fp2 = {"parent": {"tag": "div", "attrs": {}, "text": ""}, "self": {"tag": "button", "attrs": {}, "text": "x", "siblings": [], "path": ["button"]}}
+    s = similarity_score(fp1, fp2)
+    assert 0 <= s < 1.0
+
+
+def test_similarity_score_same_tag_and_text():
+    fp1 = {"parent": {"tag": "div", "attrs": {}, "text": ""}, "self": {"tag": "a", "attrs": {"href": "#"}, "text": "Click", "siblings": [], "path": ["div", "a"]}}
+    fp2 = {"parent": {"tag": "div", "attrs": {}, "text": ""}, "self": {"tag": "a", "attrs": {"href": "#"}, "text": "Click", "siblings": [], "path": ["div", "a"]}}
+    assert similarity_score(fp1, fp2) >= 0.8
+
+
+@pytest.mark.asyncio
+async def test_relocate_no_stored_returns_none(tmp_path):
+    from zerotoken.adaptive_storage import AdaptiveStorage
+    storage = AdaptiveStorage(db_path=str(tmp_path / "t.db"))
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content("<body><a href='#'>X</a></body>")
+        handle = await relocate(page, "example.com", "#missing", storage)
+        await browser.close()
+    assert handle is None
+
+
+@pytest.mark.asyncio
+async def test_relocate_finds_element_when_stored(tmp_path):
+    from zerotoken.adaptive_storage import AdaptiveStorage
+    storage = AdaptiveStorage(db_path=str(tmp_path / "t.db"))
+    SAMPLE = """
+    <!DOCTYPE html><html><body>
+    <div><a id="link1" href="#">Product 1</a></div>
+    </body></html>
+    """
+    from playwright.async_api import async_playwright
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content(SAMPLE)
+        el = await page.query_selector("#link1")
+        assert el is not None
+        fp = await extract_fingerprint(el, page)
+        assert fp is not None
+        storage.save("example.com", "#link1", fp)
+        await browser.close()
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch()
+        page = await browser.new_page()
+        await page.set_content("<body><div><a class='new' data-id='1'>Product 1</a></div></body>")
+        handle = await relocate(page, "example.com", "#link1", storage, threshold=0.3)
+        await browser.close()
+    assert handle is not None
