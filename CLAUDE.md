@@ -130,7 +130,7 @@ AI Agent (ReAct 模式)
 ## MCP 工具列表
 
 ### Browser Tools
-- `browser_init` - 初始化浏览器
+- `browser_init` - 初始化浏览器；可选 **stealth**（默认 false）：为 true 时启用反检测（启动参数 + 指纹伪装），适合易被云盾/反爬拦截的场景
 - `browser_close` - 关闭浏览器
 - `browser_open` / `browser_click` / `browser_input` / `browser_get_text` / `browser_get_html` / `browser_wait_for` / `browser_extract_data` - 原子操作，返回 OperationRecord
 - 上述返回 record 的工具支持可选参数 **include_screenshot**（默认 true）；设为 false 时响应中不包含截图，可减少 token

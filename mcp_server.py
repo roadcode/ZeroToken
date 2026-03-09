@@ -256,13 +256,14 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="browser_init",
-            description="Initialize the browser (call once before using other browser tools)",
+            description="Initialize the browser (call once before using other browser tools). Use stealth=True to reduce automation detection (launch args + fingerprint masking).",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "headless": {"type": "boolean", "description": "Run in headless mode", "default": True},
                     "viewport_width": {"type": "integer", "description": "Viewport width", "default": 1920},
-                    "viewport_height": {"type": "integer", "description": "Viewport height", "default": 1080}
+                    "viewport_height": {"type": "integer", "description": "Viewport height", "default": 1080},
+                    "stealth": {"type": "boolean", "description": "Enable stealth mode: hide automation flags and mask fingerprint", "default": False}
                 }
             }
         ),
@@ -316,7 +317,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 "width": arguments.get("viewport_width", 1920),
                 "height": arguments.get("viewport_height", 1080)
             }
-            await controller.start(headless=headless, viewport=viewport)
+            stealth = arguments.get("stealth", False)
+            await controller.start(headless=headless, viewport=viewport, stealth=stealth)
             return [TextContent(
                 type="text",
                 text=json.dumps({

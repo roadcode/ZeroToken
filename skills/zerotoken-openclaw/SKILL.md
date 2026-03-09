@@ -7,7 +7,7 @@ description: Use when using ZeroToken MCP via OpenClaw for browser automation, t
 
 教会 Agent 使用 ZeroToken MCP 做浏览器自动化、轨迹录制与脚本重放。旨在让 **OpenClaw 执行定时/重复任务时尽量少消耗 Token**。
 
-OpenClaw 项目主页：`https://github.com/AMOS144/zerotoken`
+ZeroToken 项目主页：`https://github.com/AMOS144/zerotoken`
 
 ## 何时使用 / 何时不该用
 
@@ -20,8 +20,23 @@ OpenClaw 项目主页：`https://github.com/AMOS144/zerotoken`
 
 ## 前置条件
 
-- ZeroToken MCP Server 已启动并接入当前 OpenClaw 环境。
+- ZeroToken MCP Server 已安装，并在当前环境中注册为 `zerotoken`（或等价的 MCP server id）。
 - 执行浏览器操作前需先 `browser_init`；完成后可选 `browser_close`。
+
+## MCP 未配置时的处理
+
+当调用 ZeroToken 相关 MCP 工具失败，并出现类似以下症状时：
+
+- 找不到名为 `zerotoken` 的 MCP server；
+- `browser_init` / `trajectory_start` 等工具报「tool not found」或「MCP server unavailable」；
+
+Agent 应：
+
+1. 明确告知用户：**ZeroToken MCP 尚未在当前环境安装或启用，无法直接使用浏览器自动化能力。**
+2. 询问用户当前所用平台（如「Cursor / OpenClaw / 其他支持 MCP 的客户端」），并请用户：
+   - 在其平台的 MCP Marketplace / 设置页中搜索并安装 `ZeroToken`；
+   - 或按 ZeroToken 官方文档在本地启动 `mcp_server.py`，并将该服务注册为 id 为 `zerotoken` 的 MCP server。
+3. 在用户确认安装 / 启用完成后，再从 `browser_init` 开始重新执行 ZeroToken 相关步骤。
 
 ## MCP 工具与流程
 

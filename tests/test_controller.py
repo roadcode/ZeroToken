@@ -167,17 +167,55 @@ class TestBrowserController:
             assert controller._browser is mock_browser
 
     @pytest.mark.asyncio
+    async def test_start_stealth_mode(self, controller):
+        """Test start with stealth=True uses stealth args and adds init script."""
+        from zerotoken.stealth import STEALTH_LAUNCH_ARGS, STEALTH_INIT_SCRIPT
+
+        mock_page = AsyncMock()
+        mock_context = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
+        mock_browser = AsyncMock()
+        mock_chromium = AsyncMock()
+        mock_playwright = AsyncMock()
+
+        mock_chromium.launch = AsyncMock(return_value=mock_browser)
+        mock_browser.new_context = AsyncMock(return_value=mock_context)
+        mock_context.new_page = AsyncMock(return_value=mock_page)
+        mock_playwright.chromium = mock_chromium
+
+        async def mock_start():
+            return mock_playwright
+
+        with patch('zerotoken.controller.async_playwright') as mock_cls:
+            mock_cls.return_value.start = mock_start
+
+            await controller.start(headless=True, stealth=True)
+
+            assert controller._page is mock_page
+            assert controller._browser is mock_browser
+            mock_chromium.launch.assert_called_once()
+            call_kw = mock_chromium.launch.call_args[1]
+            assert call_kw.get("args") == STEALTH_LAUNCH_ARGS
+            mock_context.add_init_script.assert_called_once_with(STEALTH_INIT_SCRIPT)
+
+    @pytest.mark.asyncio
     async def test_stop(self, controller):
         """Test stopping browser."""
         controller._page = AsyncMock()
         controller._context = AsyncMock()
         controller._browser = AsyncMock()
+        page_mock = controller._page
+        context_mock = controller._context
+        browser_mock = controller._browser
 
         await controller.stop()
 
-        controller._page.close.assert_called_once()
-        controller._context.close.assert_called_once()
-        controller._browser.close.assert_called_once()
+        page_mock.close.assert_called_once()
+        context_mock.close.assert_called_once()
+        browser_mock.close.assert_called_once()
+        assert controller._page is None
+        assert controller._context is None
+        assert controller._browser is None
 
     def test_page_property(self, controller):
         """Test page property raises if not started."""

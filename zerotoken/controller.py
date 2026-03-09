@@ -16,6 +16,11 @@ from .wait_strategy import SmartWait, WaitConfig, WaitCondition
 from .recovery import ErrorRecovery, RetryWrapper
 from .adaptive import extract_fingerprint, relocate, _domain_from_url
 from .adaptive_storage import AdaptiveStorage
+from .stealth import (
+    STEALTH_LAUNCH_ARGS,
+    STEALTH_INIT_SCRIPT,
+    DEFAULT_STEALTH_USER_AGENT,
+)
 
 
 class PageState:
@@ -118,26 +123,44 @@ class BrowserController:
             # 选择器缓存
             self._selector_cache: Dict[str, SmartSelector] = {}
 
-    async def start(self, headless: bool = True, viewport: Dict[str, int] = None) -> None:
-        """Initialize browser with enhanced configuration."""
+    async def start(
+        self,
+        headless: bool = True,
+        viewport: Dict[str, int] = None,
+        stealth: bool = False,
+    ) -> None:
+        """Initialize browser with enhanced configuration.
+        When stealth=True, use launch args and init script to reduce automation detection.
+        """
         if self._browser is not None and not self._browser.is_connected():
             self._page = None
             self._context = None
             self._browser = None
         if self._browser is None:
             playwright = await async_playwright().start()
+            launch_args = (
+                STEALTH_LAUNCH_ARGS
+                if stealth
+                else ["--disable-gpu", "--no-sandbox", "--disable-dev-shm-usage"]
+            )
             self._browser = await playwright.chromium.launch(
                 headless=headless,
-                args=[
-                    "--disable-gpu",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage"
-                ]
+                args=launch_args,
             )
-            self._context = await self._browser.new_context(
-                viewport=viewport or {"width": 1920, "height": 1080},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+            vp = viewport or {"width": 1920, "height": 1080}
+            if stealth:
+                self._context = await self._browser.new_context(
+                    viewport=vp,
+                    user_agent=DEFAULT_STEALTH_USER_AGENT,
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                )
+                await self._context.add_init_script(STEALTH_INIT_SCRIPT)
+            else:
+                self._context = await self._browser.new_context(
+                    viewport=vp,
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                )
             self._page = await self._context.new_page()
             self._step_counter = 0
             self._operation_history = []
