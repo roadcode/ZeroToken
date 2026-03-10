@@ -44,6 +44,10 @@ Agent 应：
 
 - **browser**：`browser_init`（可选 `stealth: true` 反爬）、`browser_close`、`browser_open`、`browser_click`、`browser_input`、`browser_get_text`、`browser_get_html`、`browser_screenshot`、`browser_wait_for`、`browser_extract_data`
 - **trajectory**：`trajectory_start`、`trajectory_complete`、`trajectory_get`、`trajectory_list`、`trajectory_load`、`trajectory_delete`
+- **script**：`script_save`、`script_list`、`script_load`、`script_delete`；`run_script(task_id, vars?)` 无 LLM 回放
+- **session**：`session_list`、`session_get(session_id)` 查回放/录制会话
+
+脚本与录制记录均由 MCP 后端存储在数据库中，通过上述工具访问，不依赖本地文件路径。
 
 可选参数：`include_screenshot: false` 减少响应体积；`auto_save: true` / `adaptive: true` 用于自适应元素定位。
 
@@ -79,9 +83,9 @@ Agent 应：
 
 ## 脚本格式与执行方式
 
-### 格式（zerotoken_scripts/<task_id>.json）
+### 格式（存于 MCP 数据库）
 
-脚本为 Agent 可读取的 **JSON**，结构示例：
+脚本通过 `script_save` / `script_load` 读写，结构示例：
 
 ```json
 {
@@ -107,11 +111,11 @@ Agent 应：
 
 当用户或 cron 消息为「执行 ZeroToken 脚本 &lt;task_id&gt;」或「跑一下 &lt;task_id&gt; 的脚本」时：
 
-1. 读取 `zerotoken_scripts/<task_id>.json`（若无则提示先根据轨迹生成脚本）。
-2. 按 `steps` 顺序执行：无 `fuzzy_point` 则直接调用对应 MCP 并传入 `params`；有 `fuzzy_point` 则根据当前页面与 hint 做一次推理（如截图、提取、输入），再调用 MCP，然后继续。
-3. 全部步骤完成后结束。
+1. 调用 `script_load(task_id)` 从 MCP 数据库读取脚本；若无则提示先根据轨迹生成并 `script_save`。
+2. **有 Agent 在场**：按 `steps` 顺序调用对应 MCP；有 `fuzzy_point` 时根据当前页面与 hint 做一次推理再继续。
+3. **无人值守 / 确定性回放**：调用 `run_script(task_id, vars?)`，由 MCP 内 ScriptEngine 执行，无需 LLM，结果写入 session；可用 `session_list` / `session_get` 查看。
 
-脚本是「数据驱动的 MCP 调用序列」，Agent 按表执行 + 模糊点介入，Token 消耗低。
+脚本是「数据驱动的 MCP 调用序列」，存于 MCP 数据库，Token 消耗低。
 
 ### 模糊点执行约定
 
@@ -135,16 +139,13 @@ Agent 应：
    | extract_data | browser_extract_data |
 
    轨迹不包含 `browser_init`、`trajectory_start`；生成脚本时在 steps 开头补上这两步（若需录制回放）。
-3. **输出**：生成并保存：
-   - **主格式**：`zerotoken_scripts/<task_id>.json`，steps 中 action 用映射后的 MCP 名，params 与轨迹一致，fuzzy_point 从轨迹带出。
-   - **可选**：`zerotoken_scripts/<task_id>.md`，同序步骤的可读列表。
-4. 若目录不存在，先创建 `zerotoken_scripts/` 再写入。
+3. **输出**：调用 `script_save(task_id, goal, steps)` 写入 MCP 数据库；steps 中 action 用映射后的 MCP 名，params 与轨迹一致，`selector_candidates`、`fuzzy_point` 从轨迹带出。
 
 ## 保存位置与复用查找
 
-- **默认**：`zerotoken_scripts/<task_id>.json`
-- **查找**：当用户或 cron 要求「执行/复用某任务」时，先 `trajectory_list` 得到 task_id，再检查 `zerotoken_scripts/<task_id>.json` 是否存在；若有则读取并按 steps 执行，若无则提示「该任务尚无脚本，是否根据轨迹生成？」。
-- **可选**：`zerotoken_scripts/manifest.json` 维护 `[{ "task_id", "path", "goal", "created_at" }]`，可先读 manifest 再定位。
+- **脚本与轨迹**：均由 MCP 后端存储在数据库（SQLite）中，不依赖本地文件路径。
+- **查找**：执行/复用某任务时，用 `trajectory_list` 或 `script_list` 得到 task_id，用 `script_load(task_id)` 取脚本；若无则提示「该任务尚无脚本，是否根据轨迹生成？」并可用 `trajectory_load` + 生成逻辑 + `script_save` 写入。
+- **会话**：每次 `run_script` 或录制产生 session，用 `session_list`、`session_get(session_id)` 查看。
 
 ## 安装
 
@@ -160,5 +161,5 @@ Agent 应：
 
 - 忘记先调用 `browser_init` 就直接使用 `browser_open` / `browser_click`，导致第一次调用失败或异常。
 - 录制轨迹时未使用 `export_for_ai: true`，后续生成脚本时需要额外处理轨迹数据。
-- `task_id` 在 trajectory 与 `zerotoken_scripts/<task_id>.json` 文件名中不一致，导致执行时找不到对应脚本。
+- `task_id` 在 trajectory 与 script 中不一致，导致 `script_load(task_id)` 找不到对应脚本。
 - 无人值守场景仍然依赖包含大量 `fuzzy_point` 的脚本，容易在模糊点步骤卡住；这类任务应提前评估是否需要人工兜底。
