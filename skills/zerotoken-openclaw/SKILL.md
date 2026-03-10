@@ -85,6 +85,26 @@ Agent 应：
 
 **不主动生成**：未提复用、未提定时/重复时，只做轨迹录制与保存。若用户后续要脚本再生成。
 
+## 定时任务如何找到对应脚本（基于 job_id 绑定）
+
+当 **OpenClaw 以定时任务触发本 Skill** 时，事件参数中会携带该任务的 `job_id`。ZeroToken 使用 `job_id` 作为绑定键（`binding_key`），并在 MCP 数据库的 `script_bindings` 表中维护「job_id ↔ 脚本」关系。
+
+Agent 必须遵守以下约定：
+
+1. **始终使用 `job_id` 作为 binding_key 查询绑定**：
+   - 调用 `script_binding_get(binding_key=job_id)`。
+2. 若返回 binding：
+   - 读取 `binding.script_task_id` 与 `binding.default_vars`；
+   - 合并本次任务特有的参数（如用户给定的视频 ID、时间范围）到 vars；
+   - 调用 `run_script(binding.script_task_id, vars=merged_vars)` 执行脚本。
+3. 若 `script_binding_get(job_id)` 返回「未找到」：
+   - 提示用户「当前 job_id 尚未绑定 ZeroToken 脚本」；
+   - 不要随意尝试其他脚本或自动新建脚本。
+4. 对于没有 `job_id` 或未标记为定时任务的场景：
+   - 视为「一次性任务」，只使用 `browser_*` + `trajectory_*` 完成当前需求，不主动查找/执行脚本。
+
+开发者应在 ZeroToken 侧或 OpenClaw 的集成层中，使用 `script_binding_set(binding_key=job_id, script_task_id=..., default_vars?, description?)` 预先将定时任务 job_id 与脚本 `task_id` 明确绑定。本 Skill 仅通过 `job_id` 查询绑定，**不对映射关系做额外推断**。
+
 ## 脚本格式与执行方式
 
 ### 格式（存于 MCP 数据库）
@@ -111,15 +131,22 @@ Agent 应：
 - 可选 `fuzzy_point`：记录该步「需要 AI/人介入」的语义信息（`reason`、`hint`），**本身不会让 ScriptEngine 自动暂停**；只有当为该步配置了匹配的 DFU / 执行点时，`run_script` 执行到该步才会返回 `status="paused"`。
 - 可选参数化：`params` 中可用 `{{varname}}`，执行前由 Agent 或配置替换（如环境变量、用户输入），或在 ExecutionPoint/DFU 暂停时由上层生成 `resolution.vars` 合并进运行时变量环境。
 
-### 执行脚本（由 ScriptEngine 自动化顺序执行）
+### 执行脚本（仅在定时 / 重复任务场景）
 
-当用户或 cron 消息为「执行 ZeroToken 脚本 &lt;task_id&gt;」或「跑一下 &lt;task_id&gt; 的脚本」时：
+**只有在以下两种情况下，才去查找并执行脚本：**
 
-1. 调用 `script_load(task_id)` 从 MCP 数据库读取脚本；若无则提示先根据轨迹生成并 `script_save`。
+- 上下文/cron 明确表明是「定时 / 周期性 / 重复执行」的任务（如每日评论、每小时抓取报表）。
+- 用户明确说「执行 ZeroToken 脚本 &lt;task_id&gt;」「跑一下 &lt;task_id&gt; 的脚本」等。
+
+在这些情况下：
+
+1. 调用 `script_load(task_id)` 从 MCP 数据库读取脚本；若无则提示先根据对应轨迹生成并 `script_save`（否则不要擅自造脚本）。
 2. 调用 `run_script(task_id, vars?)` 由 **MCP 内的 ScriptEngine 自动按 `steps` 顺序执行脚本**，无需 LLM，执行过程写入 session；返回形如 `{"success": ..., "status": "success|paused|failed", "session_id": ...}`。
 3. 若返回 `status="paused"`（例如命中 DFU / 执行点 / 失败重试上限）：
    - 上层 Agent 阅读 `pause_event`（包含 step_index、dfu_id、提示文案与需要生成的 vars），做一次决策或生成 vars；
    - 再调用 `run_script(session_id=..., resolution={...})` 恢复执行，由 ScriptEngine 继续顺序执行后续 steps。
+
+非定时/一次性任务：**优先只用 browser_* + trajectory_* 录制与完成当前任务，不主动查找/执行脚本。**
 
 脚本是「数据驱动的 MCP 调用序列」，**存于 MCP 数据库，由 ScriptEngine 自动化回放**，Token 消耗低且可通过 session 追踪每次执行。
 

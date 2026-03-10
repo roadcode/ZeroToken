@@ -383,6 +383,46 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
+            name="script_binding_set",
+            description="Bind an external job_id (binding_key) to a script task_id, with optional default vars and description.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "binding_key": {"type": "string", "description": "External job identifier (e.g. OpenClaw job_id)"},
+                    "script_task_id": {"type": "string", "description": "ZeroToken script task_id"},
+                    "description": {"type": "string", "description": "Optional human-readable description"},
+                    "default_vars": {"type": "object", "description": "Optional default vars for this binding"}
+                },
+                "required": ["binding_key", "script_task_id"]
+            }
+        ),
+        Tool(
+            name="script_binding_get",
+            description="Get a script binding by binding_key (job_id).",
+            inputSchema={
+                "type": "object",
+                "properties": {"binding_key": {"type": "string"}},
+                "required": ["binding_key"]
+            }
+        ),
+        Tool(
+            name="script_binding_list",
+            description="List script bindings.",
+            inputSchema={
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "default": 100}}
+            }
+        ),
+        Tool(
+            name="script_binding_delete",
+            description="Delete a script binding by binding_key.",
+            inputSchema={
+                "type": "object",
+                "properties": {"binding_key": {"type": "string"}},
+                "required": ["binding_key"]
+            }
+        ),
+        Tool(
             name="browser_init",
             description="Initialize the browser (call once before using other browser tools). Use stealth=True to reduce automation detection (launch args + fingerprint masking).",
             inputSchema={
@@ -802,6 +842,40 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 return [TextContent(type="text", text=_error_response("session_id is required", code="INVALID_PARAMS", retryable=False))]
             steps = get_storage().session_get(session_id)
             return [TextContent(type="text", text=json.dumps({"success": True, "steps": steps}, indent=2, ensure_ascii=False))]
+
+        elif name == "script_binding_set":
+            binding_key = arguments.get("binding_key")
+            script_task_id = arguments.get("script_task_id")
+            if not binding_key or not script_task_id:
+                return [TextContent(type="text", text=_error_response("binding_key and script_task_id are required", code="INVALID_PARAMS", retryable=False))]
+            get_storage().script_binding_set(
+                binding_key,
+                script_task_id=script_task_id,
+                description=arguments.get("description", "") or "",
+                default_vars=arguments.get("default_vars") or {},
+            )
+            return [TextContent(type="text", text=json.dumps({"success": True, "binding_key": binding_key, "script_task_id": script_task_id}, indent=2, ensure_ascii=False))]
+
+        elif name == "script_binding_get":
+            binding_key = arguments.get("binding_key")
+            if not binding_key:
+                return [TextContent(type="text", text=_error_response("binding_key is required", code="INVALID_PARAMS", retryable=False))]
+            binding = get_storage().script_binding_get(binding_key)
+            if binding is None:
+                return [TextContent(type="text", text=_error_response(f"No binding for key: {binding_key}", code="SCRIPT_BINDING_NOT_FOUND", retryable=False))]
+            return [TextContent(type="text", text=json.dumps({"success": True, "binding": binding}, indent=2, ensure_ascii=False))]
+
+        elif name == "script_binding_list":
+            limit = arguments.get("limit", 100)
+            items = get_storage().script_binding_list(limit=limit)
+            return [TextContent(type="text", text=json.dumps({"bindings": items}, indent=2, ensure_ascii=False))]
+
+        elif name == "script_binding_delete":
+            binding_key = arguments.get("binding_key")
+            if not binding_key:
+                return [TextContent(type="text", text=_error_response("binding_key is required", code="INVALID_PARAMS", retryable=False))]
+            ok = get_storage().script_binding_delete(binding_key)
+            return [TextContent(type="text", text=json.dumps({"success": True, "deleted": ok}, indent=2, ensure_ascii=False))]
 
         else:
             return [TextContent(

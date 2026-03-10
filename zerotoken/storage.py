@@ -177,3 +177,34 @@ class SessionRuntimeStore(ABC):
     ) -> None:
         """Update runtime state fields for a session."""
         ...
+
+
+class ScriptBindingStore(ABC):
+    """Abstract store for binding external job_ids to script task_ids."""
+
+    @abstractmethod
+    def script_binding_set(
+        self,
+        binding_key: str,
+        *,
+        script_task_id: str,
+        description: str = "",
+        default_vars: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Create or update a binding from binding_key (e.g. OpenClaw job_id) to script_task_id."""
+        ...
+
+    @abstractmethod
+    def script_binding_get(self, binding_key: str) -> Optional[Dict[str, Any]]:
+        """Get binding by binding_key. Returns None if not found."""
+        ...
+
+    @abstractmethod
+    def script_binding_list(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """List bindings (binding_key, script_task_id, description)."""
+        ...
+
+    @abstractmethod
+    def script_binding_delete(self, binding_key: str) -> bool:
+        """Delete binding. Returns True if deleted."""
+        ...

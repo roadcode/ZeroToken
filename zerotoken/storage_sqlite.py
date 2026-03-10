@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .storage import ScriptStore, TrajectoryStore, SessionStore, DFUStore, SessionRuntimeStore
+from .storage import ScriptStore, TrajectoryStore, SessionStore, DFUStore, SessionRuntimeStore, ScriptBindingStore
 
 _RUNTIME_UNSET = object()
 
@@ -23,7 +23,7 @@ def _json_deserializer(s: Optional[str]) -> Any:
     return json.loads(s)
 
 
-class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, SessionRuntimeStore):
+class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, SessionRuntimeStore, ScriptBindingStore):
     """Single SQLite-backed storage for scripts, trajectories, and sessions."""
 
     def __init__(self, db_path: str = "zerotoken.db"):
@@ -110,6 +110,16 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, Sessio
                 updated_at TEXT NOT NULL
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS script_bindings (
+                binding_key TEXT PRIMARY KEY,
+                script_task_id TEXT NOT NULL,
+                description TEXT,
+                default_vars_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         self.conn.commit()
 
     # --- ScriptStore ---
@@ -146,6 +156,78 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, Sessio
             ),
         )
         self.conn.commit()
+
+    # --- ScriptBindingStore ---
+    def script_binding_set(
+        self,
+        binding_key: str,
+        *,
+        script_task_id: str,
+        description: str = "",
+        default_vars: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        now = datetime.utcnow().isoformat() + "Z"
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO script_bindings (binding_key, script_task_id, description, default_vars_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(binding_key) DO UPDATE SET
+                script_task_id = excluded.script_task_id,
+                description = excluded.description,
+                default_vars_json = excluded.default_vars_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                binding_key,
+                script_task_id,
+                description,
+                _json_serializer(default_vars or {}),
+                now,
+                now,
+            ),
+        )
+        self.conn.commit()
+
+    def script_binding_get(self, binding_key: str) -> Optional[Dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT binding_key, script_task_id, description, default_vars_json, created_at, updated_at FROM script_bindings WHERE binding_key = ?",
+            (binding_key,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "binding_key": row["binding_key"],
+            "script_task_id": row["script_task_id"],
+            "description": row["description"] or "",
+            "default_vars": _json_deserializer(row["default_vars_json"]) or {},
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def script_binding_list(self, limit: int = 100) -> List[Dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT binding_key, script_task_id, description, updated_at FROM script_bindings ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        )
+        return [
+            {
+                "binding_key": r["binding_key"],
+                "script_task_id": r["script_task_id"],
+                "description": r["description"] or "",
+                "updated_at": r["updated_at"],
+            }
+            for r in cur.fetchall()
+        ]
+
+    def script_binding_delete(self, binding_key: str) -> bool:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM script_bindings WHERE binding_key = ?", (binding_key,))
+        self.conn.commit()
+        return cur.rowcount > 0
 
     def script_load(self, task_id: str) -> Optional[Dict[str, Any]]:
         cur = self.conn.cursor()
