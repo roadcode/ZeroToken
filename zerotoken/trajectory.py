@@ -5,10 +5,13 @@ Stores and manages operation records for replay and analysis.
 
 import json
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, TYPE_CHECKING
 from pathlib import Path
 
 from .controller import OperationRecord, BrowserController
+
+if TYPE_CHECKING:
+    from .storage import TrajectoryStore
 
 
 class Trajectory:
@@ -85,11 +88,13 @@ class TrajectoryRecorder:
     def __init__(
         self,
         trajectories_dir: str = "trajectories",
-        auto_save: bool = True
+        auto_save: bool = True,
+        trajectory_store: Optional["TrajectoryStore"] = None,
     ):
         self.trajectories_dir = Path(trajectories_dir)
         self.trajectories_dir.mkdir(parents=True, exist_ok=True)
         self.auto_save = auto_save
+        self.trajectory_store = trajectory_store
         self._current_trajectory: Optional[Trajectory] = None
         self._controller: Optional[BrowserController] = None
 
@@ -178,12 +183,14 @@ class TrajectoryRecorder:
             result=data['result'],
             page_state=page_state,
             screenshot=data.get('screenshot'),
-            error=data.get('error')
+            error=data.get('error'),
+            fuzzy_point=data.get('fuzzy_point'),
+            selector_candidates=data.get('selector_candidates'),
         )
 
     def save_trajectory(self, trajectory: Optional[Trajectory] = None) -> str:
         """
-        Save trajectory to file.
+        Save trajectory to file and optionally to TrajectoryStore (DB).
 
         Returns:
             File path where trajectory was saved
@@ -197,6 +204,14 @@ class TrajectoryRecorder:
 
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(traj.to_dict(), f, indent=2, ensure_ascii=False)
+
+        if self.trajectory_store:
+            self.trajectory_store.trajectory_save(
+                task_id=traj.task_id,
+                goal=traj.goal,
+                operations=traj.operations,
+                metadata=traj.metadata,
+            )
 
         return str(filepath)
 

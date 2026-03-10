@@ -52,7 +52,8 @@ class OperationRecord:
         page_state: PageState,
         screenshot: Optional[str] = None,
         error: Optional[str] = None,
-        fuzzy_point: Optional[Dict[str, Any]] = None
+        fuzzy_point: Optional[Dict[str, Any]] = None,
+        selector_candidates: Optional[List[Dict[str, Any]]] = None,
     ):
         self.step = step
         self.action = action
@@ -62,6 +63,7 @@ class OperationRecord:
         self.screenshot = screenshot
         self.error = error
         self.fuzzy_point = fuzzy_point
+        self.selector_candidates = selector_candidates
         self.timestamp = datetime.now().isoformat()
 
     def to_dict(self) -> Dict[str, Any]:
@@ -79,6 +81,8 @@ class OperationRecord:
             record["error"] = self.error
         if self.fuzzy_point is not None:
             record["fuzzy_point"] = self.fuzzy_point
+        if self.selector_candidates is not None:
+            record["selector_candidates"] = self.selector_candidates
         return record
 
 
@@ -416,10 +420,19 @@ class BrowserController:
         error = None
         old_url = self._page.url
         page_state = None
+        selector_candidates = None
 
         try:
             await self._page.wait_for_selector(selector, timeout=timeout)
             el = await self._page.query_selector(selector)
+            if el:
+                self._init_stability_modules()
+                if self._selector_generator:
+                    try:
+                        smart = await self._selector_generator.generate(el)
+                        selector_candidates = [{"type": c.type.value, "value": c.value} for c in smart.all_selectors()]
+                    except Exception:
+                        pass
             if el and auto_save and storage:
                 fp = await extract_fingerprint(el, self._page)
                 if fp:
@@ -484,7 +497,8 @@ class BrowserController:
             page_state=page_state,
             screenshot=screenshot_after,
             error=error,
-            fuzzy_point=self._make_fuzzy_point(fuzzy_reason, fuzzy_hint)
+            fuzzy_point=self._make_fuzzy_point(fuzzy_reason, fuzzy_hint),
+            selector_candidates=selector_candidates,
         )
         self._operation_history.append(record)
         return record
@@ -526,10 +540,19 @@ class BrowserController:
         screenshot = None
         error = None
         page_state = None
+        selector_candidates = None
 
         try:
             await self._page.wait_for_selector(selector, timeout=self._config["timeout"])
             el = await self._page.query_selector(selector)
+            if el:
+                self._init_stability_modules()
+                if self._selector_generator:
+                    try:
+                        smart = await self._selector_generator.generate(el)
+                        selector_candidates = [{"type": c.type.value, "value": c.value} for c in smart.all_selectors()]
+                    except Exception:
+                        pass
             if el and auto_save and storage:
                 fp = await extract_fingerprint(el, self._page)
                 if fp:
@@ -584,7 +607,8 @@ class BrowserController:
             page_state=page_state,
             screenshot=screenshot,
             error=error,
-            fuzzy_point=self._make_fuzzy_point(fuzzy_reason, fuzzy_hint)
+            fuzzy_point=self._make_fuzzy_point(fuzzy_reason, fuzzy_hint),
+            selector_candidates=selector_candidates,
         )
         self._operation_history.append(record)
         return record
