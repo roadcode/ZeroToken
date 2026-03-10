@@ -58,10 +58,12 @@ def save_script_from_trajectory(
     Returns task_id.
     """
     script = trajectory_to_script(trajectory_data, task_id=task_id, prepend_init=prepend_init)
+    source_trajectory_id = trajectory_data.get("id")
     script_store.script_save(
         script["task_id"],
         goal=script["goal"],
         steps=script["steps"],
         params_schema={},
+        source_trajectory_id=source_trajectory_id,
     )
     return script["task_id"]

@@ -312,14 +312,57 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="run_script",
-            description="Run a script by task_id without LLM (deterministic replay). Writes session to DB.",
+            description="Run a script (start) or resume a paused session (deterministic replay). Writes session to DB.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "task_id": {"type": "string", "description": "Task ID of the script"},
-                    "vars": {"type": "object", "description": "Optional map of {{varname}} replacements"}
+                    "task_id": {"type": "string", "description": "Start mode: task_id of the script (mutually exclusive with session_id)"},
+                    "vars": {"type": "object", "description": "Start mode: optional map of {{varname}} replacements"},
+                    "session_id": {"type": "string", "description": "Resume mode: session_id to resume (mutually exclusive with task_id)"},
+                    "resolution": {"type": "object", "description": "Resume mode: resolution object {type, note?, patch?}"}
+                }
+            }
+        ),
+        Tool(
+            name="dfu_save",
+            description="Save a DFU (Dynamic Fuzzy Unit) to the MCP database. Overwrites if dfu_id exists.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "dfu_id": {"type": "string", "description": "DFU ID (key)"},
+                    "name": {"type": "string", "description": "DFU name"},
+                    "description": {"type": "string", "description": "Optional description", "default": ""},
+                    "triggers": {"type": "array", "description": "Trigger rules (declarative JSON), exact match only"},
+                    "prompt": {"type": "string", "description": "Prompt shown to orchestrator", "default": ""},
+                    "allowed_resolutions": {"type": "array", "description": "Allowed resolution types", "items": {"type": "string"}}
                 },
-                "required": ["task_id"]
+                "required": ["dfu_id", "name", "triggers"]
+            }
+        ),
+        Tool(
+            name="dfu_list",
+            description="List DFUs from the MCP database.",
+            inputSchema={
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "default": 100}}
+            }
+        ),
+        Tool(
+            name="dfu_load",
+            description="Load a DFU by dfu_id from the MCP database.",
+            inputSchema={
+                "type": "object",
+                "properties": {"dfu_id": {"type": "string"}},
+                "required": ["dfu_id"]
+            }
+        ),
+        Tool(
+            name="dfu_delete",
+            description="Delete a DFU by dfu_id from the MCP database.",
+            inputSchema={
+                "type": "object",
+                "properties": {"dfu_id": {"type": "string"}},
+                "required": ["dfu_id"]
             }
         ),
         Tool(
@@ -683,15 +726,70 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         elif name == "run_script":
             task_id = arguments.get("task_id")
-            vars_map = arguments.get("vars") or {}
-            if not task_id:
-                return [TextContent(type="text", text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False))]
-            script = get_storage().script_load(task_id)
-            if script is None:
-                return [TextContent(type="text", text=_error_response(f"No script for task_id: {task_id}", code="SCRIPT_NOT_FOUND", retryable=False))]
-            engine = ScriptEngine(vars_map=vars_map)
-            result = await engine.run_script(script, controller, get_storage())
+            session_id = arguments.get("session_id")
+            if bool(task_id) == bool(session_id):
+                return [
+                    TextContent(
+                        type="text",
+                        text=_error_response(
+                            "Provide exactly one of task_id or session_id",
+                            code="INVALID_PARAMS",
+                            retryable=False,
+                        ),
+                    )
+                ]
+            storage = get_storage()
+            if task_id:
+                vars_map = arguments.get("vars") or {}
+                script = storage.script_load(task_id)
+                if script is None:
+                    return [TextContent(type="text", text=_error_response(f"No script for task_id: {task_id}", code="SCRIPT_NOT_FOUND", retryable=False))]
+                engine = ScriptEngine(vars_map=vars_map)
+                result = await engine.run_script_start(script, controller, storage)
+                return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+            resolution = arguments.get("resolution")
+            if resolution is None:
+                return [TextContent(type="text", text=_error_response("resolution is required for resume", code="INVALID_PARAMS", retryable=False))]
+            engine = ScriptEngine(vars_map={})
+            result = await engine.run_script_resume(session_id, resolution, controller, storage)
             return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+
+        elif name == "dfu_save":
+            dfu_id = arguments.get("dfu_id")
+            name_ = arguments.get("name")
+            triggers = arguments.get("triggers")
+            if not dfu_id or not name_ or triggers is None:
+                return [TextContent(type="text", text=_error_response("dfu_id, name, triggers are required", code="INVALID_PARAMS", retryable=False))]
+            get_storage().dfu_save(
+                dfu_id,
+                name=name_,
+                description=arguments.get("description", "") or "",
+                triggers=triggers,
+                prompt=arguments.get("prompt", "") or "",
+                allowed_resolutions=arguments.get("allowed_resolutions") or [],
+            )
+            return [TextContent(type="text", text=json.dumps({"success": True, "dfu_id": dfu_id}, indent=2, ensure_ascii=False))]
+
+        elif name == "dfu_list":
+            limit = arguments.get("limit", 100)
+            items = get_storage().dfu_list(limit=limit)
+            return [TextContent(type="text", text=json.dumps({"dfus": items}, indent=2, ensure_ascii=False))]
+
+        elif name == "dfu_load":
+            dfu_id = arguments.get("dfu_id")
+            if not dfu_id:
+                return [TextContent(type="text", text=_error_response("dfu_id is required", code="INVALID_PARAMS", retryable=False))]
+            dfu = get_storage().dfu_load(dfu_id)
+            if dfu is None:
+                return [TextContent(type="text", text=_error_response(f"No dfu for dfu_id: {dfu_id}", code="DFU_NOT_FOUND", retryable=False))]
+            return [TextContent(type="text", text=json.dumps({"success": True, "dfu": dfu}, indent=2, ensure_ascii=False))]
+
+        elif name == "dfu_delete":
+            dfu_id = arguments.get("dfu_id")
+            if not dfu_id:
+                return [TextContent(type="text", text=_error_response("dfu_id is required", code="INVALID_PARAMS", retryable=False))]
+            ok = get_storage().dfu_delete(dfu_id)
+            return [TextContent(type="text", text=json.dumps({"success": True, "deleted": ok}, indent=2, ensure_ascii=False))]
 
         elif name == "session_list":
             limit = arguments.get("limit", 100)

@@ -75,5 +75,19 @@ def test_save_script_from_trajectory_then_load_has_selector_candidates(db_path):
     save_script_from_trajectory(loaded_traj, store, prepend_init=False)
     script = store.script_load("task_script_1")
     assert script is not None
+    assert script["source_trajectory_id"] == traj_id
     assert len(script["steps"]) == 2
     assert script["steps"][1]["selector_candidates"] == [{"type": "css", "value": "#ok"}]
+
+
+def test_manual_script_save_has_no_source_trajectory_id(db_path):
+    store = SQLiteStorage(db_path)
+    store.script_save(
+        "manual_1",
+        goal="Manual",
+        steps=[{"action": "browser_open", "params": {"url": "https://example.com"}}],
+        params_schema={},
+    )
+    loaded = store.script_load("manual_1")
+    assert loaded is not None
+    assert loaded.get("source_trajectory_id") is None

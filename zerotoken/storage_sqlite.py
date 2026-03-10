@@ -8,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .storage import ScriptStore, TrajectoryStore, SessionStore
+from .storage import ScriptStore, TrajectoryStore, SessionStore, DFUStore, SessionRuntimeStore
+
+_RUNTIME_UNSET = object()
 
 
 def _json_serializer(obj: Any) -> str:
@@ -21,7 +23,7 @@ def _json_deserializer(s: Optional[str]) -> Any:
     return json.loads(s)
 
 
-class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore):
+class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, SessionRuntimeStore):
     """Single SQLite-backed storage for scripts, trajectories, and sessions."""
 
     def __init__(self, db_path: str = "zerotoken.db"):
@@ -44,10 +46,16 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore):
                 goal TEXT NOT NULL,
                 steps TEXT NOT NULL,
                 params_schema TEXT,
+                source_trajectory_id INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
         """)
+        # Backward-compatible migration: add provenance column if DB existed before.
+        cur.execute("PRAGMA table_info(scripts)")
+        cols = {r[1] for r in cur.fetchall()}
+        if "source_trajectory_id" not in cols:
+            cur.execute("ALTER TABLE scripts ADD COLUMN source_trajectory_id INTEGER")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS trajectories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,6 +87,29 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore):
                 FOREIGN KEY (session_id) REFERENCES session_headers(session_id)
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS dfus (
+                dfu_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                triggers_json TEXT NOT NULL,
+                prompt TEXT,
+                allowed_resolutions_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS session_runtime (
+                session_id TEXT PRIMARY KEY,
+                task_id TEXT,
+                cursor_step_index INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                pause_event_json TEXT,
+                vars_json TEXT,
+                updated_at TEXT NOT NULL
+            )
+        """)
         self.conn.commit()
 
     # --- ScriptStore ---
@@ -89,26 +120,39 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore):
         goal: str,
         steps: List[Dict[str, Any]],
         params_schema: Optional[Dict[str, Any]] = None,
+        source_trajectory_id: Optional[int] = None,
     ) -> None:
         now = datetime.utcnow().isoformat() + "Z"
         cur = self.conn.cursor()
         cur.execute(
             """
-            INSERT INTO scripts (task_id, goal, steps, params_schema, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO scripts (task_id, goal, steps, params_schema, source_trajectory_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(task_id) DO UPDATE SET
                 goal = excluded.goal,
                 steps = excluded.steps,
                 params_schema = excluded.params_schema,
+                source_trajectory_id = excluded.source_trajectory_id,
                 updated_at = excluded.updated_at
             """,
-            (task_id, goal, _json_serializer(steps), _json_serializer(params_schema or {}), now, now),
+            (
+                task_id,
+                goal,
+                _json_serializer(steps),
+                _json_serializer(params_schema or {}),
+                source_trajectory_id,
+                now,
+                now,
+            ),
         )
         self.conn.commit()
 
     def script_load(self, task_id: str) -> Optional[Dict[str, Any]]:
         cur = self.conn.cursor()
-        cur.execute("SELECT task_id, goal, steps, params_schema, created_at, updated_at FROM scripts WHERE task_id = ?", (task_id,))
+        cur.execute(
+            "SELECT task_id, goal, steps, params_schema, source_trajectory_id, created_at, updated_at FROM scripts WHERE task_id = ?",
+            (task_id,),
+        )
         row = cur.fetchone()
         if row is None:
             return None
@@ -117,6 +161,7 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore):
             "goal": row["goal"],
             "steps": _json_deserializer(row["steps"]),
             "params_schema": _json_deserializer(row["params_schema"]),
+            "source_trajectory_id": row["source_trajectory_id"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
@@ -261,3 +306,173 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore):
             {"session_id": r["session_id"], "task_id": r["task_id"], "session_type": r["session_type"], "created_at": r["created_at"]}
             for r in cur.fetchall()
         ]
+
+    # --- DFUStore ---
+    def dfu_save(
+        self,
+        dfu_id: str,
+        *,
+        name: str,
+        description: str = "",
+        triggers: List[Dict[str, Any]],
+        prompt: str = "",
+        allowed_resolutions: Optional[List[str]] = None,
+    ) -> None:
+        now = datetime.utcnow().isoformat() + "Z"
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO dfus (dfu_id, name, description, triggers_json, prompt, allowed_resolutions_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(dfu_id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                triggers_json = excluded.triggers_json,
+                prompt = excluded.prompt,
+                allowed_resolutions_json = excluded.allowed_resolutions_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                dfu_id,
+                name,
+                description,
+                _json_serializer(triggers),
+                prompt,
+                _json_serializer(allowed_resolutions or []),
+                now,
+                now,
+            ),
+        )
+        self.conn.commit()
+
+    def dfu_load(self, dfu_id: str) -> Optional[Dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT dfu_id, name, description, triggers_json, prompt, allowed_resolutions_json, created_at, updated_at FROM dfus WHERE dfu_id = ?",
+            (dfu_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "dfu_id": row["dfu_id"],
+            "name": row["name"],
+            "description": row["description"] or "",
+            "triggers": _json_deserializer(row["triggers_json"]) or [],
+            "prompt": row["prompt"] or "",
+            "allowed_resolutions": _json_deserializer(row["allowed_resolutions_json"]) or [],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def dfu_list(self, limit: int = 100) -> List[Dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT dfu_id, name, updated_at FROM dfus ORDER BY updated_at DESC LIMIT ?", (limit,))
+        return [{"dfu_id": r["dfu_id"], "name": r["name"], "updated_at": r["updated_at"]} for r in cur.fetchall()]
+
+    def dfu_delete(self, dfu_id: str) -> bool:
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM dfus WHERE dfu_id = ?", (dfu_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    # --- SessionRuntimeStore ---
+    def runtime_init(
+        self,
+        session_id: str,
+        *,
+        task_id: Optional[str],
+        cursor_step_index: int,
+        status: str,
+        pause_event: Optional[Dict[str, Any]] = None,
+        vars: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        now = datetime.utcnow().isoformat() + "Z"
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO session_runtime (session_id, task_id, cursor_step_index, status, pause_event_json, vars_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                task_id = excluded.task_id,
+                cursor_step_index = excluded.cursor_step_index,
+                status = excluded.status,
+                pause_event_json = excluded.pause_event_json,
+                vars_json = excluded.vars_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                session_id,
+                task_id,
+                int(cursor_step_index),
+                status,
+                _json_serializer(pause_event) if pause_event is not None else None,
+                _json_serializer(vars or {}),
+                now,
+            ),
+        )
+        self.conn.commit()
+
+    def runtime_get(self, session_id: str) -> Optional[Dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT session_id, task_id, cursor_step_index, status, pause_event_json, vars_json, updated_at FROM session_runtime WHERE session_id = ?",
+            (session_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "session_id": row["session_id"],
+            "task_id": row["task_id"],
+            "cursor_step_index": int(row["cursor_step_index"]),
+            "status": row["status"],
+            "pause_event": _json_deserializer(row["pause_event_json"]),
+            "vars": _json_deserializer(row["vars_json"]) or {},
+            "updated_at": row["updated_at"],
+        }
+
+    def runtime_update(
+        self,
+        session_id: str,
+        *,
+        cursor_step_index: Optional[int] = None,
+        status: Optional[str] = None,
+        pause_event: Any = _RUNTIME_UNSET,
+        vars: Any = _RUNTIME_UNSET,
+    ) -> None:
+        now = datetime.utcnow().isoformat() + "Z"
+        existing = self.runtime_get(session_id)
+        if existing is None:
+            raise KeyError(f"runtime state not found: {session_id}")
+        new_cursor = int(existing["cursor_step_index"] if cursor_step_index is None else cursor_step_index)
+        new_status = existing["status"] if status is None else status
+        if pause_event is _RUNTIME_UNSET:
+            new_pause_event_json = _json_serializer(existing["pause_event"]) if existing["pause_event"] is not None else None
+        else:
+            new_pause_event_json = _json_serializer(pause_event) if pause_event is not None else None
+        if vars is _RUNTIME_UNSET:
+            new_vars_json = _json_serializer(existing["vars"] or {})
+        else:
+            new_vars_json = _json_serializer(vars or {})
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            UPDATE session_runtime
+            SET cursor_step_index = ?,
+                status = ?,
+                pause_event_json = ?,
+                vars_json = ?,
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (
+                new_cursor,
+                new_status,
+                new_pause_event_json,
+                new_vars_json,
+                now,
+                session_id,
+            ),
+        )
+        self.conn.commit()
