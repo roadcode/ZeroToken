@@ -40,14 +40,18 @@ Agent 应：
 
 ## MCP 工具与流程
 
-### 工具清单
+### 工具清单（与 MCP 对齐）
 
 - **browser**：`browser_init`（可选 `stealth: true` 反爬）、`browser_close`、`browser_open`、`browser_click`、`browser_input`、`browser_get_text`、`browser_get_html`、`browser_screenshot`、`browser_wait_for`、`browser_extract_data`
 - **trajectory**：`trajectory_start`、`trajectory_complete`、`trajectory_get`、`trajectory_list`、`trajectory_load`、`trajectory_delete`
-- **script**：`script_save`、`script_list`、`script_load`、`script_delete`；`run_script(task_id, vars?)` 无 LLM 回放
-- **session**：`session_list`、`session_get(session_id)` 查回放/录制会话
+- **script**：
+  - `script_save`、`script_list`、`script_load`、`script_delete`
+  - `run_script`：无 LLM 回放脚本执行  
+    - **Start 模式**：`{ "task_id": "...", "vars"?: {...} }`
+    - **Resume 模式（高级用法）**：`{ "session_id": "...", "resolution": {...} }`（由上层编排器在 DFU/模糊点暂停后恢复）
+- **session**：`session_list`、`session_get(session_id)`：查询录制 / 回放会话明细，用于 debug、审计、定时任务复盘
 
-脚本与录制记录均由 MCP 后端存储在数据库中，通过上述工具访问，不依赖本地文件路径。
+脚本、轨迹与会话均由 MCP 后端存储在 **SQLite 数据库** 中，通过上述工具访问，不依赖本地文件路径。
 
 可选参数：`include_screenshot: false` 减少响应体积；`auto_save: true` / `adaptive: true` 用于自适应元素定位。
 
@@ -79,7 +83,7 @@ Agent 应：
 1. **重复任务**：用户明确说会多次执行（如「以后每天跑」「定时执行」「重复任务」），或 cron/上下文表明是定时/周期任务。
 2. **用户明确要求**：用户说「生成可复用脚本」「保存成脚本下次用」「导出为脚本」等。
 
-**不主动生成**：单次录制、只说「录一下」未提复用、未提定时/重复时，只做轨迹录制与保存。若用户后续要脚本再生成。
+**不主动生成**：未提复用、未提定时/重复时，只做轨迹录制与保存。若用户后续要脚本再生成。
 
 ## 脚本格式与执行方式
 
@@ -104,23 +108,26 @@ Agent 应：
 ```
 
 - `steps`：有序数组；每步 `action` 对应 MCP 工具名，`params` 为该工具入参。
-- 可选 `fuzzy_point`：该步需 AI/人介入，含 `reason`、`hint`；执行时 Agent 在此步根据当前页面做决策（如 `browser_extract_data` 或等待人工）再继续。
-- 可选参数化：`params` 中可用 `{{varname}}`，执行前由 Agent 或配置替换（如环境变量、用户输入）。
+- 可选 `fuzzy_point`：记录该步「需要 AI/人介入」的语义信息（`reason`、`hint`），**本身不会让 ScriptEngine 自动暂停**；只有当为该步配置了匹配的 DFU / 执行点时，`run_script` 执行到该步才会返回 `status="paused"`。
+- 可选参数化：`params` 中可用 `{{varname}}`，执行前由 Agent 或配置替换（如环境变量、用户输入），或在 ExecutionPoint/DFU 暂停时由上层生成 `resolution.vars` 合并进运行时变量环境。
 
-### 执行脚本
+### 执行脚本（由 ScriptEngine 自动化顺序执行）
 
 当用户或 cron 消息为「执行 ZeroToken 脚本 &lt;task_id&gt;」或「跑一下 &lt;task_id&gt; 的脚本」时：
 
 1. 调用 `script_load(task_id)` 从 MCP 数据库读取脚本；若无则提示先根据轨迹生成并 `script_save`。
-2. **有 Agent 在场**：按 `steps` 顺序调用对应 MCP；有 `fuzzy_point` 时根据当前页面与 hint 做一次推理再继续。
-3. **无人值守 / 确定性回放**：调用 `run_script(task_id, vars?)`，由 MCP 内 ScriptEngine 执行，无需 LLM，结果写入 session；可用 `session_list` / `session_get` 查看。
+2. 调用 `run_script(task_id, vars?)` 由 **MCP 内的 ScriptEngine 自动按 `steps` 顺序执行脚本**，无需 LLM，执行过程写入 session；返回形如 `{"success": ..., "status": "success|paused|failed", "session_id": ...}`。
+3. 若返回 `status="paused"`（例如命中 DFU / 执行点 / 失败重试上限）：
+   - 上层 Agent 阅读 `pause_event`（包含 step_index、dfu_id、提示文案与需要生成的 vars），做一次决策或生成 vars；
+   - 再调用 `run_script(session_id=..., resolution={...})` 恢复执行，由 ScriptEngine 继续顺序执行后续 steps。
 
-脚本是「数据驱动的 MCP 调用序列」，存于 MCP 数据库，Token 消耗低。
+脚本是「数据驱动的 MCP 调用序列」，**存于 MCP 数据库，由 ScriptEngine 自动化回放**，Token 消耗低且可通过 session 追踪每次执行。
 
-### 模糊点执行约定
+### 模糊点 / DFU 执行约定
 
-- **有 Agent 在场**：遇到 `fuzzy_point` 步骤时，Agent 根据 reason/hint 与当前页面决定调用哪个 MCP（如 `browser_extract_data`、`browser_input`），然后继续。
-- **无人值守**：该步可能无法自动化，可跳过或失败告警；含模糊点的脚本在无人值守下可能需人工兜底。
+- **有 Agent 在场（手动调用 browser_* 时）**：遇到带 `fuzzy_point` 的 OperationRecord / 步骤时，可把 `reason`、`hint` 视作提示，根据当前页面决定是否额外调用 `browser_extract_data`、`browser_input` 等，再继续。
+- **使用 `run_script`（ScriptEngine 自动回放）时**：是否暂停由 DFU/执行点规则决定（`dfu_*` 配置 + trigger 匹配），而不是单靠 `fuzzy_point`。若某步既有 `fuzzy_point` 又命中 DFU，则 ScriptEngine 会在该步返回 `status="paused"` + `pause_event`，由上层 Agent 决定 `resolution` 后再恢复。
+- **无人值守**：不建议依赖大量需要强人工判断的步骤；含模糊点但未配置 DFU 的脚本，在纯 `run_script` 模式下会直接按脚本跑完，可能需要通过 session 结果+日志事后审计。
 
 ## 根据轨迹生成脚本（流程）
 
@@ -139,7 +146,7 @@ Agent 应：
    | extract_data | browser_extract_data |
 
    轨迹不包含 `browser_init`、`trajectory_start`；生成脚本时在 steps 开头补上这两步（若需录制回放）。
-3. **输出**：调用 `script_save(task_id, goal, steps)` 写入 MCP 数据库；steps 中 action 用映射后的 MCP 名，params 与轨迹一致，`selector_candidates`、`fuzzy_point` 从轨迹带出。
+3. **输出**：调用 `script_save(task_id, goal, steps)` 写入 MCP 数据库；steps 中 action 用映射后的 MCP 名，params 与轨迹一致，`selector_candidates`、`fuzzy_point` 从轨迹带出。（当前 MCP 未直接暴露「轨迹 → 脚本」工具，以上映射逻辑需在上层/Agent 侧实现或复用本仓库的 Python 辅助函数。）
 
 ## 保存位置与复用查找
 
