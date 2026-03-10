@@ -14,6 +14,8 @@ from mcp.types import Tool, TextContent
 
 from zerotoken.controller import BrowserController
 from zerotoken.trajectory import TrajectoryRecorder
+from zerotoken.storage_sqlite import SQLiteStorage
+from zerotoken.engine import ScriptEngine, save_script_from_trajectory
 
 
 # 创建 MCP 服务器
@@ -23,6 +25,20 @@ server = Server("zerotoken")
 _controller = None
 _trajectory_recorder = None
 _current_trajectory = None
+_storage = None
+
+
+def _base_dir() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def get_storage() -> SQLiteStorage:
+    """Get or create global SQLite storage (scripts, trajectories, sessions)."""
+    global _storage
+    if _storage is None:
+        db_path = os.environ.get("ZEROTOKEN_DB") or os.path.join(_base_dir(), "zerotoken.db")
+        _storage = SQLiteStorage(db_path)
+    return _storage
 
 
 def get_controller() -> BrowserController:
@@ -37,10 +53,11 @@ def get_trajectory_recorder() -> TrajectoryRecorder:
     """Get or create global trajectory recorder."""
     global _trajectory_recorder
     if _trajectory_recorder is None:
-        # 使用 mcp_server.py 所在目录下的 trajectories，避免 MCP 子进程 cwd 不是项目根导致轨迹存到别处
-        _base_dir = os.path.dirname(os.path.abspath(__file__))
-        _trajectories_dir = os.path.join(_base_dir, "trajectories")
-        _trajectory_recorder = TrajectoryRecorder(trajectories_dir=_trajectories_dir)
+        trajectories_dir = os.path.join(_base_dir(), "trajectories")
+        _trajectory_recorder = TrajectoryRecorder(
+            trajectories_dir=trajectories_dir,
+            trajectory_store=get_storage(),
+        )
         _trajectory_recorder.bind_controller(get_controller())
     return _trajectory_recorder
 
@@ -252,6 +269,74 @@ async def list_tools() -> list[Tool]:
                     "task_id": {"type": "string", "description": "Task ID of the trajectory to delete"}
                 },
                 "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="script_save",
+            description="Save a script to the MCP database (task_id, goal, steps). Overwrites if task_id exists.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID (script key)"},
+                    "goal": {"type": "string", "description": "Goal description"},
+                    "steps": {"type": "array", "description": "List of steps: {action, params, selector_candidates?, fuzzy_point?}"}
+                },
+                "required": ["task_id", "goal", "steps"]
+            }
+        ),
+        Tool(
+            name="script_list",
+            description="List scripts in the MCP database.",
+            inputSchema={
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "description": "Max number to return", "default": 100}}
+            }
+        ),
+        Tool(
+            name="script_load",
+            description="Load a script by task_id from the MCP database.",
+            inputSchema={
+                "type": "object",
+                "properties": {"task_id": {"type": "string", "description": "Task ID"}},
+                "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="script_delete",
+            description="Delete a script by task_id from the MCP database.",
+            inputSchema={
+                "type": "object",
+                "properties": {"task_id": {"type": "string"}},
+                "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="run_script",
+            description="Run a script by task_id without LLM (deterministic replay). Writes session to DB.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID of the script"},
+                    "vars": {"type": "object", "description": "Optional map of {{varname}} replacements"}
+                },
+                "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="session_list",
+            description="List sessions from the MCP database.",
+            inputSchema={
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "default": 100}}
+            }
+        ),
+        Tool(
+            name="session_get",
+            description="Get session steps by session_id.",
+            inputSchema={
+                "type": "object",
+                "properties": {"session_id": {"type": "string"}},
+                "required": ["session_id"]
             }
         ),
         Tool(
@@ -516,12 +601,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "trajectory_list":
+            storage = get_storage()
             limit = arguments.get("limit", 20)
-            since = arguments.get("since")
-            items = recorder.list_trajectories()
-            if since is not None:
-                items = [t for t in items if t.get("saved_at", 0) >= since]
-            items = items[:limit]
+            items = storage.trajectory_list(limit=limit)
             return [TextContent(
                 type="text",
                 text=json.dumps({"trajectories": items}, indent=2, ensure_ascii=False)
@@ -529,26 +611,31 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         elif name == "trajectory_load":
             task_id = arguments.get("task_id")
-            fmt = arguments.get("format", "ai_prompt")
+            fmt = arguments.get("format", "json")
             if not task_id:
                 return [TextContent(
                     type="text",
                     text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False)
                 )]
-            traj = recorder.load_trajectory_by_task_id(task_id)
-            if traj is None:
+            storage = get_storage()
+            traj_data = storage.trajectory_load_by_task_id(task_id)
+            if traj_data is None:
                 return [TextContent(
                     type="text",
                     text=_error_response(f"No saved trajectory for task_id: {task_id}", code="TRAJECTORY_NOT_FOUND", retryable=False)
                 )]
             if fmt == "ai_prompt":
+                from zerotoken.trajectory import Trajectory
+                t = Trajectory(traj_data["task_id"], traj_data["goal"])
+                t.operations = traj_data["operations"]
+                t.metadata = traj_data.get("metadata") or {}
                 return [TextContent(
                     type="text",
-                    text=json.dumps({"success": True, "ai_prompt": traj.to_ai_prompt_format()}, indent=2, ensure_ascii=False)
+                    text=json.dumps({"success": True, "ai_prompt": t.to_ai_prompt_format()}, indent=2, ensure_ascii=False)
                 )]
             return [TextContent(
                 type="text",
-                text=json.dumps({"success": True, "trajectory": traj.to_dict()}, indent=2, ensure_ascii=False)
+                text=json.dumps({"success": True, "trajectory": traj_data}, indent=2, ensure_ascii=False)
             )]
 
         elif name == "trajectory_delete":
@@ -558,11 +645,65 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     type="text",
                     text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False)
                 )]
-            deleted = recorder.delete_trajectory(task_id)
+            deleted = get_storage().trajectory_delete_by_task_id(task_id)
             return [TextContent(
                 type="text",
                 text=json.dumps({"success": True, "deleted": deleted}, indent=2)
             )]
+
+        elif name == "script_save":
+            task_id = arguments.get("task_id")
+            goal = arguments.get("goal", "")
+            steps = arguments.get("steps", [])
+            if not task_id:
+                return [TextContent(type="text", text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False))]
+            get_storage().script_save(task_id, goal=goal, steps=steps)
+            return [TextContent(type="text", text=json.dumps({"success": True, "task_id": task_id}, indent=2))]
+
+        elif name == "script_list":
+            limit = arguments.get("limit", 100)
+            items = get_storage().script_list(limit=limit)
+            return [TextContent(type="text", text=json.dumps({"scripts": items}, indent=2, ensure_ascii=False))]
+
+        elif name == "script_load":
+            task_id = arguments.get("task_id")
+            if not task_id:
+                return [TextContent(type="text", text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False))]
+            script = get_storage().script_load(task_id)
+            if script is None:
+                return [TextContent(type="text", text=_error_response(f"No script for task_id: {task_id}", code="SCRIPT_NOT_FOUND", retryable=False))]
+            return [TextContent(type="text", text=json.dumps({"success": True, "script": script}, indent=2, ensure_ascii=False))]
+
+        elif name == "script_delete":
+            task_id = arguments.get("task_id")
+            if not task_id:
+                return [TextContent(type="text", text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False))]
+            ok = get_storage().script_delete(task_id)
+            return [TextContent(type="text", text=json.dumps({"success": True, "deleted": ok}, indent=2))]
+
+        elif name == "run_script":
+            task_id = arguments.get("task_id")
+            vars_map = arguments.get("vars") or {}
+            if not task_id:
+                return [TextContent(type="text", text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False))]
+            script = get_storage().script_load(task_id)
+            if script is None:
+                return [TextContent(type="text", text=_error_response(f"No script for task_id: {task_id}", code="SCRIPT_NOT_FOUND", retryable=False))]
+            engine = ScriptEngine(vars_map=vars_map)
+            result = await engine.run_script(script, controller, get_storage())
+            return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+
+        elif name == "session_list":
+            limit = arguments.get("limit", 100)
+            items = get_storage().session_list(limit=limit)
+            return [TextContent(type="text", text=json.dumps({"sessions": items}, indent=2, ensure_ascii=False))]
+
+        elif name == "session_get":
+            session_id = arguments.get("session_id")
+            if not session_id:
+                return [TextContent(type="text", text=_error_response("session_id is required", code="INVALID_PARAMS", retryable=False))]
+            steps = get_storage().session_get(session_id)
+            return [TextContent(type="text", text=json.dumps({"success": True, "steps": steps}, indent=2, ensure_ascii=False))]
 
         else:
             return [TextContent(

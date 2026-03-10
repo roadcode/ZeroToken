@@ -165,6 +165,25 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore):
             "created_at": row["created_at"],
         }
 
+    def trajectory_load_by_task_id(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Load latest trajectory with given task_id."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT id, task_id, goal, operations, metadata, created_at FROM trajectories WHERE task_id = ? ORDER BY id DESC LIMIT 1",
+            (task_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "task_id": row["task_id"],
+            "goal": row["goal"],
+            "operations": _json_deserializer(row["operations"]),
+            "metadata": _json_deserializer(row["metadata"]),
+            "created_at": row["created_at"],
+        }
+
     def trajectory_list(self, limit: int = 100) -> List[Dict[str, Any]]:
         cur = self.conn.cursor()
         cur.execute("SELECT id, task_id, goal, created_at FROM trajectories ORDER BY id DESC LIMIT ?", (limit,))
@@ -175,6 +194,13 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore):
         cur.execute("DELETE FROM trajectories WHERE id = ?", (trajectory_id,))
         self.conn.commit()
         return cur.rowcount > 0
+
+    def trajectory_delete_by_task_id(self, task_id: str) -> int:
+        """Delete all trajectories with given task_id. Returns number deleted."""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM trajectories WHERE task_id = ?", (task_id,))
+        self.conn.commit()
+        return cur.rowcount
 
     # --- SessionStore ---
     def session_start(
