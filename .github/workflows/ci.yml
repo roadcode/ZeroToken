@@ -23,7 +23,7 @@ jobs:
           version: "latest"
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --group default --group test
 
       - name: Install Playwright browsers
         run: uv run playwright install chromium --with-deps
