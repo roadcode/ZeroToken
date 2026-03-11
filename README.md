@@ -16,7 +16,9 @@ ZeroToken 推荐与 OpenClaw 搭配，用作浏览器执行层与轨迹重放引
 
 - **MCPorter / ClawHub 安装**：通过 MCPorter 或 OpenClaw 的 ClawHub 安装 ZeroToken MCP，配置会自动写入 `openclaw.json`。安装后启用名为 `zerotoken` 的 MCP server，再安装 `zerotoken-openclaw` Skill（见 `docs/skills.md`）即可使用。
 - **MCP 已通过 Marketplace 安装时**：在支持 MCP 的客户端（如 Cursor / OpenClaw）中启用名为 `zerotoken` 的 MCP server，然后在 OpenClaw 安装 `zerotoken-openclaw` Skill，即可在工作流中直接使用 ZeroToken 的浏览器工具和轨迹脚本。
-- **本地开发 / 调试场景**：按照下文「安装」「快速开始」章节启动本地 `mcp_server.py`，并在客户端中将其注册为 id 为 `zerotoken` 的 MCP server，再搭配 `zerotoken-openclaw` Skill 使用。
+- **本地开发 / 调试场景**：按照下文「安装」「快速开始」章节启动本地 MCP 服务，并在客户端中将其注册为 id 为 `zerotoken` 的 MCP server，再搭配 `zerotoken-openclaw` Skill 使用。
+
+**重要**：OpenClaw 使用 ZeroToken 时需采用 **HTTP 模式**（Streamable HTTP），并在**后台手动启动** `zerotoken-mcp-http` 服务，否则每次调用会新建进程导致 browser 状态丢失。详见 `skills/zerotoken-openclaw/SKILL.md`。
 
 典型工作流示例和脚本格式说明见：
 
@@ -188,6 +190,20 @@ mcporter install zerotoken --target openclaw --configure
 
 若 MCPorter 暂未收录，可手动在 `~/.openclaw/openclaw.json` 的 `mcpServers` 中添加：
 
+**OpenClaw（推荐 HTTP 模式）**：先在后台运行 `zerotoken-mcp-http`，再配置为 URL：
+
+```json
+{
+  "mcpServers": {
+    "zerotoken": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+**Cursor 等 IDE（stdio 模式）**：
+
 ```json
 {
   "mcpServers": {
@@ -199,7 +215,7 @@ mcporter install zerotoken --target openclaw --configure
 }
 ```
 
-安装后需执行 `playwright install chromium` 安装浏览器依赖。若使用 uv，将 `command` 改为 `uv`、`args` 改为 `["run", "zerotoken-mcp"]`。
+若使用 uv，将 `command` 改为 `uv`、`args` 改为 `["run", "zerotoken-mcp"]`。安装后需执行 `playwright install chromium` 安装浏览器依赖。
 
 ### 本地开发 / pip 安装
 
@@ -222,7 +238,21 @@ playwright install chromium
 
 ### 1. 启动 MCP Server
 
+**HTTP 模式**（推荐，适用于 OpenClaw / MCPorter，服务常驻以保持 browser 状态）：
+
 ```bash
+zerotoken-mcp-http
+# 或
+zerotoken-mcp --transport streamable-http
+```
+
+默认监听 `http://0.0.0.0:8000/mcp`。可通过 `--port`、`--host` 或环境变量 `ZEROTOKEN_HTTP_PORT`、`ZEROTOKEN_HTTP_HOST` 覆盖。**使用 OpenClaw 时必须在后台手动启动此服务**，并在 `openclaw.json` 中将 MCP 配置为 URL（如 `http://localhost:8000/mcp`）而非 command，详见 `skills/zerotoken-openclaw/SKILL.md`。
+
+**stdio 模式**（适用于 Cursor 等 IDE，进程由客户端拉起）：
+
+```bash
+zerotoken-mcp
+# 或
 python mcp_server.py
 ```
 
@@ -371,7 +401,8 @@ zerotoken/
 │   ├── wait_strategy.py      # SmartWait - 等待策略
 │   └── recovery.py           # ErrorRecovery - 错误恢复
 ├── zerotoken.db              # SQLite 数据库（脚本/轨迹/会话，运行时生成）
-├── mcp_server.py             # MCP Server 入口
+├── mcp_server.py             # MCP Server 入口（stdio）
+├── mcp_server_http.py        # MCP Server HTTP 入口（Streamable HTTP）
 └── README.md
 ```
 

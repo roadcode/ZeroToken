@@ -494,24 +494,25 @@ def _format_operation_record(record, include_screenshot: bool = True) -> str:
     return json.dumps(d, indent=2, ensure_ascii=False)
 
 
-# 工具执行处理
-@server.call_tool()
-async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+async def handle_tool_call(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    """Tool call entry point, shared by stdio and HTTP transports."""
     global _current_trajectory
+
+    args = dict(arguments)
+    record_trajectory = args.pop("record_trajectory", True)
+    include_screenshot = args.pop("include_screenshot", True)
 
     controller = get_controller()
     recorder = get_trajectory_recorder()
-    record_trajectory = arguments.pop("record_trajectory", True)
-    include_screenshot = arguments.pop("include_screenshot", True)
 
     try:
         if name == "browser_init":
-            headless = arguments.get("headless", True)
+            headless = args.get("headless", True)
             viewport = {
-                "width": arguments.get("viewport_width", 1920),
-                "height": arguments.get("viewport_height", 1080)
+                "width": args.get("viewport_width", 1920),
+                "height": args.get("viewport_height", 1080)
             }
-            stealth = arguments.get("stealth", False)
+            stealth = args.get("stealth", False)
             await controller.start(headless=headless, viewport=viewport, stealth=stealth)
             return [TextContent(
                 type="text",
@@ -530,8 +531,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "browser_open":
-            url = arguments["url"]
-            wait_until = arguments.get("wait_until", "networkidle")
+            url = args["url"]
+            wait_until = args.get("wait_until", "networkidle")
             record = await controller.open(url, wait_until=wait_until)
             if record_trajectory:
                 recorder.ensure_current_trajectory()
@@ -542,12 +543,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "browser_click":
-            selector = arguments["selector"]
-            timeout = arguments.get("timeout")
-            wait_after = arguments.get("wait_after", 0.5)
-            auto_save = arguments.get("auto_save", False)
-            adaptive = arguments.get("adaptive", False)
-            identifier = arguments.get("identifier")
+            selector = args["selector"]
+            timeout = args.get("timeout")
+            wait_after = args.get("wait_after", 0.5)
+            auto_save = args.get("auto_save", False)
+            adaptive = args.get("adaptive", False)
+            identifier = args.get("identifier")
             record = await controller.click(
                 selector, timeout=timeout, wait_after=wait_after,
                 auto_save=auto_save, adaptive=adaptive, identifier=identifier
@@ -561,13 +562,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "browser_input":
-            selector = arguments["selector"]
-            text = arguments["text"]
-            delay = arguments.get("delay", 50)
-            clear_first = arguments.get("clear_first", True)
-            auto_save = arguments.get("auto_save", False)
-            adaptive = arguments.get("adaptive", False)
-            identifier = arguments.get("identifier")
+            selector = args["selector"]
+            text = args["text"]
+            delay = args.get("delay", 50)
+            clear_first = args.get("clear_first", True)
+            auto_save = args.get("auto_save", False)
+            adaptive = args.get("adaptive", False)
+            identifier = args.get("identifier")
             record = await controller.input(
                 selector, text, delay=delay, clear_first=clear_first,
                 auto_save=auto_save, adaptive=adaptive, identifier=identifier
@@ -581,11 +582,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "browser_get_text":
-            selector = arguments["selector"]
-            attr = arguments.get("attr", "text")
-            auto_save = arguments.get("auto_save", False)
-            adaptive = arguments.get("adaptive", False)
-            identifier = arguments.get("identifier")
+            selector = args["selector"]
+            attr = args.get("attr", "text")
+            auto_save = args.get("auto_save", False)
+            adaptive = args.get("adaptive", False)
+            identifier = args.get("identifier")
             record = await controller.get_text(
                 selector, attr=attr,
                 auto_save=auto_save, adaptive=adaptive, identifier=identifier
@@ -599,10 +600,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "browser_get_html":
-            selector = arguments.get("selector")
-            auto_save = arguments.get("auto_save", False)
-            adaptive = arguments.get("adaptive", False)
-            identifier = arguments.get("identifier")
+            selector = args.get("selector")
+            auto_save = args.get("auto_save", False)
+            adaptive = args.get("adaptive", False)
+            identifier = args.get("identifier")
             record = await controller.get_html(
                 selector=selector,
                 auto_save=auto_save, adaptive=adaptive, identifier=identifier
@@ -616,9 +617,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "browser_screenshot":
-            path = arguments.get("path")
-            full_page = arguments.get("full_page", False)
-            selector = arguments.get("selector")
+            path = args.get("path")
+            full_page = args.get("full_page", False)
+            selector = args.get("selector")
             record = await controller.screenshot(path=path, full_page=full_page, selector=selector)
             if record_trajectory:
                 recorder.ensure_current_trajectory()
@@ -630,9 +631,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
         elif name == "browser_wait_for":
-            condition = arguments["condition"]
-            value = arguments.get("value")
-            timeout = arguments.get("timeout")
+            condition = args["condition"]
+            value = args.get("value")
+            timeout = args.get("timeout")
             record = await controller.wait_for(condition, value, timeout=timeout)
             if record_trajectory:
                 recorder.ensure_current_trajectory()
@@ -643,7 +644,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "browser_extract_data":
-            schema = arguments["schema"]
+            schema = args["schema"]
             record = await controller.extract_data(schema)
             recorder.ensure_current_trajectory()
             recorder.record_operation(record)
@@ -653,8 +654,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "trajectory_start":
-            task_id = arguments["task_id"]
-            goal = arguments["goal"]
+            task_id = args["task_id"]
+            goal = args["goal"]
             trajectory = recorder.start_trajectory(task_id, goal)
             return [TextContent(
                 type="text",
@@ -667,7 +668,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "trajectory_complete":
-            export_for_ai = arguments.get("export_for_ai", True)
+            export_for_ai = args.get("export_for_ai", True)
             trajectory = recorder.complete_trajectory()
             if trajectory:
                 recorder.save_trajectory(trajectory)
@@ -697,7 +698,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "trajectory_get":
-            fmt = arguments.get("format", "json")
+            fmt = args.get("format", "json")
             trajectory = recorder.get_current_trajectory()
             if trajectory:
                 if fmt == "ai_prompt":
@@ -711,8 +712,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         elif name == "trajectory_list":
             storage = get_storage()
-            limit = arguments.get("limit", 20)
-            since = arguments.get("since")
+            limit = args.get("limit", 20)
+            since = args.get("since")
             items = storage.trajectory_list(limit=limit, since=since)
             return [TextContent(
                 type="text",
@@ -720,8 +721,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "trajectory_load":
-            task_id = arguments.get("task_id")
-            fmt = arguments.get("format", "json")
+            task_id = args.get("task_id")
+            fmt = args.get("format", "json")
             if not task_id:
                 return [TextContent(
                     type="text",
@@ -749,7 +750,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "trajectory_delete":
-            task_id = arguments.get("task_id")
+            task_id = args.get("task_id")
             if not task_id:
                 return [TextContent(
                     type="text",
@@ -762,10 +763,10 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "trajectory_to_script":
-            task_id = arguments.get("task_id")
-            script_task_id = arguments.get("script_task_id")
-            prepend_init = arguments.get("prepend_init", True)
-            stealth = arguments.get("stealth", False)
+            task_id = args.get("task_id")
+            script_task_id = args.get("script_task_id")
+            prepend_init = args.get("prepend_init", True)
+            stealth = args.get("stealth", False)
             if not task_id:
                 return [TextContent(
                     type="text",
@@ -801,21 +802,21 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             )]
 
         elif name == "script_save":
-            task_id = arguments.get("task_id")
-            goal = arguments.get("goal", "")
-            steps = arguments.get("steps", [])
+            task_id = args.get("task_id")
+            goal = args.get("goal", "")
+            steps = args.get("steps", [])
             if not task_id:
                 return [TextContent(type="text", text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False))]
             get_storage().script_save(task_id, goal=goal, steps=steps)
             return [TextContent(type="text", text=json.dumps({"success": True, "task_id": task_id}, indent=2))]
 
         elif name == "script_list":
-            limit = arguments.get("limit", 100)
+            limit = args.get("limit", 100)
             items = get_storage().script_list(limit=limit)
             return [TextContent(type="text", text=json.dumps({"scripts": items}, indent=2, ensure_ascii=False))]
 
         elif name == "script_load":
-            task_id = arguments.get("task_id")
+            task_id = args.get("task_id")
             if not task_id:
                 return [TextContent(type="text", text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False))]
             script = get_storage().script_load(task_id)
@@ -824,15 +825,15 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps({"success": True, "script": script}, indent=2, ensure_ascii=False))]
 
         elif name == "script_delete":
-            task_id = arguments.get("task_id")
+            task_id = args.get("task_id")
             if not task_id:
                 return [TextContent(type="text", text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False))]
             ok = get_storage().script_delete(task_id)
             return [TextContent(type="text", text=json.dumps({"success": True, "deleted": ok}, indent=2))]
 
         elif name == "run_script":
-            task_id = arguments.get("task_id")
-            session_id = arguments.get("session_id")
+            task_id = args.get("task_id")
+            session_id = args.get("session_id")
             if bool(task_id) == bool(session_id):
                 return [
                     TextContent(
@@ -846,14 +847,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 ]
             storage = get_storage()
             if task_id:
-                vars_map = arguments.get("vars") or {}
+                vars_map = args.get("vars") or {}
                 script = storage.script_load(task_id)
                 if script is None:
                     return [TextContent(type="text", text=_error_response(f"No script for task_id: {task_id}", code="SCRIPT_NOT_FOUND", retryable=False))]
                 engine = ScriptEngine(vars_map=vars_map)
                 result = await engine.run_script_start(script, controller, storage)
                 return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
-            resolution = arguments.get("resolution")
+            resolution = args.get("resolution")
             if resolution is None:
                 return [TextContent(type="text", text=_error_response("resolution is required for resume", code="INVALID_PARAMS", retryable=False))]
             engine = ScriptEngine(vars_map={})
@@ -861,7 +862,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
 
         elif name == "run_script_by_job_id":
-            binding_key = arguments.get("binding_key")
+            binding_key = args.get("binding_key")
             if not binding_key:
                 return [TextContent(type="text", text=_error_response("binding_key is required", code="INVALID_PARAMS", retryable=False))]
             storage = get_storage()
@@ -877,7 +878,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 )]
             script_task_id = binding.get("script_task_id")
             default_vars = binding.get("default_vars") or {}
-            vars_arg = arguments.get("vars") or {}
+            vars_arg = args.get("vars") or {}
             vars_map = {**default_vars, **vars_arg}
             script = storage.script_load(script_task_id)
             if script is None:
@@ -896,28 +897,28 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
 
         elif name == "dfu_save":
-            dfu_id = arguments.get("dfu_id")
-            name_ = arguments.get("name")
-            triggers = arguments.get("triggers")
+            dfu_id = args.get("dfu_id")
+            name_ = args.get("name")
+            triggers = args.get("triggers")
             if not dfu_id or not name_ or triggers is None:
                 return [TextContent(type="text", text=_error_response("dfu_id, name, triggers are required", code="INVALID_PARAMS", retryable=False))]
             get_storage().dfu_save(
                 dfu_id,
                 name=name_,
-                description=arguments.get("description", "") or "",
+                description=args.get("description", "") or "",
                 triggers=triggers,
-                prompt=arguments.get("prompt", "") or "",
-                allowed_resolutions=arguments.get("allowed_resolutions") or [],
+                prompt=args.get("prompt", "") or "",
+                allowed_resolutions=args.get("allowed_resolutions") or [],
             )
             return [TextContent(type="text", text=json.dumps({"success": True, "dfu_id": dfu_id}, indent=2, ensure_ascii=False))]
 
         elif name == "dfu_list":
-            limit = arguments.get("limit", 100)
+            limit = args.get("limit", 100)
             items = get_storage().dfu_list(limit=limit)
             return [TextContent(type="text", text=json.dumps({"dfus": items}, indent=2, ensure_ascii=False))]
 
         elif name == "dfu_load":
-            dfu_id = arguments.get("dfu_id")
+            dfu_id = args.get("dfu_id")
             if not dfu_id:
                 return [TextContent(type="text", text=_error_response("dfu_id is required", code="INVALID_PARAMS", retryable=False))]
             dfu = get_storage().dfu_load(dfu_id)
@@ -926,27 +927,27 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps({"success": True, "dfu": dfu}, indent=2, ensure_ascii=False))]
 
         elif name == "dfu_delete":
-            dfu_id = arguments.get("dfu_id")
+            dfu_id = args.get("dfu_id")
             if not dfu_id:
                 return [TextContent(type="text", text=_error_response("dfu_id is required", code="INVALID_PARAMS", retryable=False))]
             ok = get_storage().dfu_delete(dfu_id)
             return [TextContent(type="text", text=json.dumps({"success": True, "deleted": ok}, indent=2, ensure_ascii=False))]
 
         elif name == "session_list":
-            limit = arguments.get("limit", 100)
+            limit = args.get("limit", 100)
             items = get_storage().session_list(limit=limit)
             return [TextContent(type="text", text=json.dumps({"sessions": items}, indent=2, ensure_ascii=False))]
 
         elif name == "session_get":
-            session_id = arguments.get("session_id")
+            session_id = args.get("session_id")
             if not session_id:
                 return [TextContent(type="text", text=_error_response("session_id is required", code="INVALID_PARAMS", retryable=False))]
             steps = get_storage().session_get(session_id)
             return [TextContent(type="text", text=json.dumps({"success": True, "steps": steps}, indent=2, ensure_ascii=False))]
 
         elif name == "script_binding_set":
-            binding_key = arguments.get("binding_key")
-            script_task_id = arguments.get("script_task_id")
+            binding_key = args.get("binding_key")
+            script_task_id = args.get("script_task_id")
             if not binding_key or not script_task_id:
                 return [TextContent(type="text", text=_error_response("binding_key and script_task_id are required", code="INVALID_PARAMS", retryable=False))]
             storage = get_storage()
@@ -963,13 +964,13 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             storage.script_binding_set(
                 binding_key,
                 script_task_id=script_task_id,
-                description=arguments.get("description", "") or "",
-                default_vars=arguments.get("default_vars") or {},
+                description=args.get("description", "") or "",
+                default_vars=args.get("default_vars") or {},
             )
             return [TextContent(type="text", text=json.dumps({"success": True, "binding_key": binding_key, "script_task_id": script_task_id}, indent=2, ensure_ascii=False))]
 
         elif name == "script_binding_get":
-            binding_key = arguments.get("binding_key")
+            binding_key = args.get("binding_key")
             if not binding_key:
                 return [TextContent(type="text", text=_error_response("binding_key is required", code="INVALID_PARAMS", retryable=False))]
             binding = get_storage().script_binding_get(binding_key)
@@ -978,12 +979,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps({"success": True, "binding": binding}, indent=2, ensure_ascii=False))]
 
         elif name == "script_binding_list":
-            limit = arguments.get("limit", 100)
+            limit = args.get("limit", 100)
             items = get_storage().script_binding_list(limit=limit)
             return [TextContent(type="text", text=json.dumps({"bindings": items}, indent=2, ensure_ascii=False))]
 
         elif name == "script_binding_delete":
-            binding_key = arguments.get("binding_key")
+            binding_key = args.get("binding_key")
             if not binding_key:
                 return [TextContent(type="text", text=_error_response("binding_key is required", code="INVALID_PARAMS", retryable=False))]
             ok = get_storage().script_binding_delete(binding_key)
@@ -1013,6 +1014,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         )]
 
 
+@server.call_tool()
+async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
+    """MCP tool handler - delegates to handle_tool_call."""
+    return await handle_tool_call(name, arguments)
+
+
 async def main():
     """Run the MCP server"""
     async with stdio_server() as (read_stream, write_stream):
@@ -1023,10 +1030,23 @@ async def main():
         )
 
 
-def run():
+def run(transport: str = "stdio"):
     """Entry point for zerotoken-mcp console script."""
-    asyncio.run(main())
+    if transport == "streamable-http":
+        from mcp_server_http import run as run_http
+        run_http()
+    else:
+        asyncio.run(main())
 
 
 if __name__ == "__main__":
-    run()
+    import argparse
+    parser = argparse.ArgumentParser(description="ZeroToken MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default=os.environ.get("ZEROTOKEN_MCP_TRANSPORT", "stdio"),
+        help="Transport: stdio (default) or streamable-http",
+    )
+    args = parser.parse_args()
+    run(transport=args.transport)

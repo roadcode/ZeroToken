@@ -7,15 +7,24 @@
     "url": "https://github.com/AMOS144/zerotoken",
     "source": "github"
   },
-  "version": "0.1.0",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "zerotoken",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "transport": {
         "type": "stdio"
       }
+    },
+    {
+      "registryType": "pypi",
+      "identifier": "zerotoken",
+      "version": "0.2.0",
+      "transport": {
+        "type": "streamable-http"
+      },
+      "description": "Run zerotoken-mcp-http in background, then connect via URL (e.g. http://localhost:8000/mcp)"
     }
   ]
 }

@@ -1,5 +1,5 @@
 ---
-name: zerotoken
+name: zerotoken-openclaw
 description: Use when using ZeroToken MCP via OpenClaw for browser automation, trajectory recording and low-token replay, especially for recurring or scheduled browser tasks.
 ---
 
@@ -22,6 +22,26 @@ ZeroToken 项目主页：`https://github.com/AMOS144/zerotoken`
 
 - 当前环境中已能通过 MCP 访问名为 `zerotoken` 的服务器（或等价的 MCP server id）。
 - 执行浏览器操作前需先调用 `browser_init`；完成后可选调用 `browser_close`。
+
+## OpenClaw 使用前准备（HTTP 模式）
+
+当通过 **OpenClaw / MCPorter** 使用 ZeroToken 时，因其每次调用会新建进程，导致 browser 状态丢失。需改用 **Streamable HTTP 传输模式**，服务常驻：
+
+1. **手动启动 HTTP 服务**（在后台常驻）：
+   - `zerotoken-mcp-http`，或
+   - `zerotoken-mcp --transport streamable-http`
+   - 默认端口 8000，可用 `--port` 或环境变量 `ZEROTOKEN_HTTP_PORT` 覆盖。
+2. **OpenClaw 配置**：在 `openclaw.json` 的 `mcpServers.zerotoken` 中，使用 URL 而非 command：
+   ```json
+   {
+     "mcpServers": {
+       "zerotoken": {
+         "url": "http://localhost:8000/mcp"
+       }
+     }
+   }
+   ```
+   具体字段名以 OpenClaw 文档为准（可能为 `streamable-http` 或 `url`）。
 
 ## MCP 未配置 / 未安装 ZeroToken 时的处理
 
