@@ -10,20 +10,101 @@
 
 一个面向 AI Agent 的轻量化浏览器自动化 MCP 引擎，支持操作记录与详细执行上下文导出。
 
-## OpenClaw 集成（推荐）
+## 在 OpenClaw 中使用 ZeroToken
 
-ZeroToken 推荐与 OpenClaw 搭配，用作浏览器执行层与轨迹重放引擎。
+ZeroToken 是 OpenClaw 的浏览器执行层，适合**录制一次、重复执行**的自动化任务（如每日登录、定时抓取）。下面说明完整接入流程。
 
-- **MCPorter / ClawHub 安装**：通过 MCPorter 或 OpenClaw 的 ClawHub 安装 ZeroToken MCP，配置会自动写入 `openclaw.json`。安装后启用名为 `zerotoken` 的 MCP server，再安装 `zerotoken-openclaw` Skill（见 `docs/skills.md`）即可使用。
-- **MCP 已通过 Marketplace 安装时**：在支持 MCP 的客户端（如 Cursor / OpenClaw）中启用名为 `zerotoken` 的 MCP server，然后在 OpenClaw 安装 `zerotoken-openclaw` Skill，即可在工作流中直接使用 ZeroToken 的浏览器工具和轨迹脚本。
-- **本地开发 / 调试场景**：按照下文「安装」「快速开始」章节启动本地 MCP 服务，并在客户端中将其注册为 id 为 `zerotoken` 的 MCP server，再搭配 `zerotoken-openclaw` Skill 使用。
+### 为什么需要 HTTP 模式？
 
-**重要**：OpenClaw 使用 ZeroToken 时需采用 **HTTP 模式**（Streamable HTTP），并在**后台手动启动** `zerotoken-mcp-http` 服务，否则每次调用会新建进程导致 browser 状态丢失。详见 `skills/zerotoken-openclaw/SKILL.md`。
+OpenClaw 通过 MCPorter 调用 MCP 时，若使用 stdio（command 模式），**每次工具调用都会新建进程**，导致 browser 实例被销毁、状态丢失。因此必须改用 **Streamable HTTP 模式**：ZeroToken 以 HTTP 服务常驻，OpenClaw 通过 URL 连接，同一会话内 browser 状态得以保持。
 
-典型工作流示例和脚本格式说明见：
+### 接入步骤（完整流程）
 
-- `docs/skills.md`：OpenClaw Skill 安装与约定
-- `skills/zerotoken-openclaw/SKILL.md`：教会 Agent 何时录制轨迹、何时生成脚本、如何以低 Token 成本重放
+#### 1. 安装 ZeroToken
+
+```bash
+# 通过 pip 或 uv
+pip install zerotoken
+# 或
+uv add zerotoken
+
+# 安装 Playwright 浏览器（必须）
+playwright install chromium
+```
+
+若通过 MCPorter 安装到 OpenClaw：
+
+```bash
+npm install -g mcporter
+mcporter install zerotoken --target openclaw --configure
+```
+
+安装后同样需执行 `playwright install chromium`。
+
+#### 2. 在后台启动 HTTP 服务，并保持常驻
+
+在终端中运行（**不要关闭**）：
+
+```bash
+zerotoken-mcp-http
+```
+
+默认监听 `http://0.0.0.0:8000/mcp`。可指定端口：
+
+```bash
+zerotoken-mcp-http --port 8001
+# 或
+ZEROTOKEN_HTTP_PORT=8001 zerotoken-mcp-http
+```
+
+#### 3. 配置 openclaw.json
+
+在 `~/.openclaw/openclaw.json`（或项目内 `openclaw.json`）的 `mcpServers` 中，将 ZeroToken 配置为 **URL**，不要用 command：
+
+```json
+{
+  "mcpServers": {
+    "zerotoken": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+若使用非默认端口，修改 URL 中的端口号即可。
+
+#### 4. 安装 zerotoken-openclaw Skill
+
+将 Skill 放入 OpenClaw 的 skills 目录之一：
+
+- 工作区：`./skills/zerotoken-openclaw/`
+- 本地共享：`~/.openclaw/skills/zerotoken-openclaw/`
+
+或通过 ClawHub：`clawhub install zerotoken-openclaw`（若已发布）。
+
+从本仓库复制：
+
+```bash
+cp -r skills/zerotoken-openclaw ~/.openclaw/skills/
+```
+
+#### 5. 在 OpenClaw 中启用
+
+在 OpenClaw 中启用名为 `zerotoken` 的 MCP server，并确保 `zerotoken-openclaw` Skill 已加载。Agent 即可通过 MCP 调用浏览器工具。
+
+### 典型工作流
+
+1. **录制轨迹**：用户描述任务（如「每日登录某站并拉取报表」），Agent 调用 `browser_init` → `browser_open` / `browser_click` / `browser_input` 等 → `trajectory_complete`，完成一次录制。
+2. **生成脚本**：对重复/定时任务，Agent 调用 `trajectory_to_script(task_id)` 将轨迹转为可回放脚本。
+3. **绑定定时任务**：Agent 调用 `script_binding_set(binding_key=job_id, script_task_id=task_id)` 将 OpenClaw 的 job_id 与脚本绑定。
+4. **定时执行**：OpenClaw 触发定时任务时，Agent 调用 `run_script_by_job_id(binding_key=job_id)` 一步执行，无需 LLM 逐步推理，Token 消耗低。
+
+更多详情见：`skills/zerotoken-openclaw/SKILL.md`、`docs/skills.md`。
+
+### 常见问题
+
+- **browser 状态丢失、每次操作都像第一次**：说明仍在使用 command 模式。请确保 (1) 在后台运行 `zerotoken-mcp-http`；(2) `openclaw.json` 中 `zerotoken` 配置为 `url` 而非 `command`。
+- **连接失败 / MCP 不可用**：确认 `zerotoken-mcp-http` 已启动且端口正确（默认 8000），URL 与配置一致。
 
 ## 核心理念
 
@@ -175,47 +256,9 @@ graph TB
 
 ## 安装
 
-### 通过 MCPorter 安装（OpenClaw 推荐）
+**OpenClaw 用户**：完整步骤见上文「[在 OpenClaw 中使用 ZeroToken](#在-openclaw-中使用-zerotoken)」。
 
-ZeroToken 提供 `server.json`，与 MCP Registry 及 MCPorter 兼容。通过 MCPorter 可自动发现、安装并配置到 OpenClaw：
-
-```bash
-# 安装 MCPorter
-npm install -g mcporter
-
-# 搜索并安装 ZeroToken（安装到 OpenClaw）
-mcporter search zerotoken
-mcporter install zerotoken --target openclaw --configure
-```
-
-若 MCPorter 暂未收录，可手动在 `~/.openclaw/openclaw.json` 的 `mcpServers` 中添加：
-
-**OpenClaw（推荐 HTTP 模式）**：先在后台运行 `zerotoken-mcp-http`，再配置为 URL：
-
-```json
-{
-  "mcpServers": {
-    "zerotoken": {
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
-```
-
-**Cursor 等 IDE（stdio 模式）**：
-
-```json
-{
-  "mcpServers": {
-    "zerotoken": {
-      "command": "zerotoken-mcp",
-      "args": []
-    }
-  }
-}
-```
-
-若使用 uv，将 `command` 改为 `uv`、`args` 改为 `["run", "zerotoken-mcp"]`。安装后需执行 `playwright install chromium` 安装浏览器依赖。
+**Cursor 等 IDE**：安装后使用 stdio 模式，在客户端配置 `command: "zerotoken-mcp"` 或 `command: "uv", args: ["run", "zerotoken-mcp"]` 即可。
 
 ### 本地开发 / pip 安装
 
@@ -238,22 +281,17 @@ playwright install chromium
 
 ### 1. 启动 MCP Server
 
-**HTTP 模式**（推荐，适用于 OpenClaw / MCPorter，服务常驻以保持 browser 状态）：
+| 场景 | 命令 | 说明 |
+|------|------|------|
+| **OpenClaw** | `zerotoken-mcp-http` | 在后台常驻，`openclaw.json` 配置 `url: "http://localhost:8000/mcp"`。详见「[在 OpenClaw 中使用 ZeroToken](#在-openclaw-中使用-zerotoken)」。 |
+| **Cursor 等 IDE** | `zerotoken-mcp` 或由客户端拉起 | stdio 模式，配置 `command: "zerotoken-mcp"`。 |
 
 ```bash
+# OpenClaw：HTTP 模式（后台常驻）
 zerotoken-mcp-http
-# 或
-zerotoken-mcp --transport streamable-http
-```
 
-默认监听 `http://0.0.0.0:8000/mcp`。可通过 `--port`、`--host` 或环境变量 `ZEROTOKEN_HTTP_PORT`、`ZEROTOKEN_HTTP_HOST` 覆盖。**使用 OpenClaw 时必须在后台手动启动此服务**，并在 `openclaw.json` 中将 MCP 配置为 URL（如 `http://localhost:8000/mcp`）而非 command，详见 `skills/zerotoken-openclaw/SKILL.md`。
-
-**stdio 模式**（适用于 Cursor 等 IDE，进程由客户端拉起）：
-
-```bash
+# Cursor：stdio 模式
 zerotoken-mcp
-# 或
-python mcp_server.py
 ```
 
 ### 2. AI Agent 通过 MCP 调用浏览器工具
