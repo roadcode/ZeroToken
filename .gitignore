@@ -40,7 +40,6 @@ htmlcov/
 .nox/
 
 # Project
-zerotoken_adaptive.db
 trajectories/
 *.db
 *.sqlite3

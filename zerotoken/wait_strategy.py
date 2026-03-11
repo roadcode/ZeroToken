@@ -4,6 +4,7 @@ Wait Strategy - 智能等待策略
 """
 
 import asyncio
+import json
 from typing import Optional, Dict, Any, List, Callable, Awaitable
 from enum import Enum
 from dataclasses import dataclass
@@ -161,9 +162,10 @@ class SmartWait:
         await self.page.wait_for_load_state(state, timeout=timeout)
 
     async def _wait_text(self, text: str, timeout: float) -> None:
-        """等待文本出现"""
+        """等待文本出现。使用 json.dumps 安全转义，防止 JS 注入。"""
+        safe_text = json.dumps(text)
         await self.page.wait_for_function(
-            f"document.body.innerText.includes('{text}')",
+            f"document.body.innerText.includes({safe_text})",
             timeout=timeout
         )
 

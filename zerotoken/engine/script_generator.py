@@ -21,6 +21,7 @@ def trajectory_to_script(
     trajectory_data: Dict[str, Any],
     task_id: Optional[str] = None,
     prepend_init: bool = True,
+    stealth: bool = False,
 ) -> Dict[str, Any]:
     """
     Convert trajectory (from trajectory_load) to script v2 format.
@@ -32,7 +33,10 @@ def trajectory_to_script(
     operations = trajectory_data.get("operations") or []
     steps: List[Dict[str, Any]] = []
     if prepend_init:
-        steps.append({"action": "browser_init", "params": {"headless": True}})
+        init_params: Dict[str, Any] = {"headless": True}
+        if stealth:
+            init_params["stealth"] = True
+        steps.append({"action": "browser_init", "params": init_params})
         steps.append({"action": "trajectory_start", "params": {"task_id": task_id, "goal": goal}})
     for op in operations:
         action = op.get("action", "")
@@ -52,12 +56,15 @@ def save_script_from_trajectory(
     script_store: Any,
     task_id: Optional[str] = None,
     prepend_init: bool = True,
+    stealth: bool = False,
 ) -> str:
     """
     Generate script from trajectory and save to ScriptStore.
     Returns task_id.
     """
-    script = trajectory_to_script(trajectory_data, task_id=task_id, prepend_init=prepend_init)
+    script = trajectory_to_script(
+        trajectory_data, task_id=task_id, prepend_init=prepend_init, stealth=stealth
+    )
     source_trajectory_id = trajectory_data.get("id")
     script_store.script_save(
         script["task_id"],

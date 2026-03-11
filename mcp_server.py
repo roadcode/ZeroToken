@@ -46,6 +46,7 @@ def get_controller() -> BrowserController:
     global _controller
     if _controller is None:
         _controller = BrowserController()
+        _controller.set_adaptive_store(get_storage())
     return _controller
 
 
@@ -53,11 +54,7 @@ def get_trajectory_recorder() -> TrajectoryRecorder:
     """Get or create global trajectory recorder."""
     global _trajectory_recorder
     if _trajectory_recorder is None:
-        trajectories_dir = os.path.join(_base_dir(), "trajectories")
-        _trajectory_recorder = TrajectoryRecorder(
-            trajectories_dir=trajectories_dir,
-            trajectory_store=get_storage(),
-        )
+        _trajectory_recorder = TrajectoryRecorder(trajectory_store=get_storage())
         _trajectory_recorder.bind_controller(get_controller())
     return _trajectory_recorder
 
@@ -250,7 +247,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="trajectory_load",
-            description="Load a saved trajectory by task_id for script generation or analysis",
+            description="Load the latest saved trajectory by task_id (not by id) for script generation or analysis",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -267,6 +264,20 @@ async def list_tools() -> list[Tool]:
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string", "description": "Task ID of the trajectory to delete"}
+                },
+                "required": ["task_id"]
+            }
+        ),
+        Tool(
+            name="trajectory_to_script",
+            description="Convert a saved trajectory to script and save to MCP database. Use task_id to load trajectory.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task ID of the saved trajectory to convert"},
+                    "script_task_id": {"type": "string", "description": "Optional script task_id (default: same as task_id)"},
+                    "prepend_init": {"type": "boolean", "description": "Prepend browser_init and trajectory_start steps", "default": True},
+                    "stealth": {"type": "boolean", "description": "Include stealth: true in browser_init for anti-bot sites", "default": False}
                 },
                 "required": ["task_id"]
             }
@@ -321,6 +332,18 @@ async def list_tools() -> list[Tool]:
                     "session_id": {"type": "string", "description": "Resume mode: session_id to resume (mutually exclusive with task_id)"},
                     "resolution": {"type": "object", "description": "Resume mode: resolution object {type, note?, patch?}"}
                 }
+            }
+        ),
+        Tool(
+            name="run_script_by_job_id",
+            description="Run a script by binding_key (e.g. OpenClaw job_id). Looks up script_task_id and default_vars, merges with vars, then executes. One-step for scheduled tasks.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "binding_key": {"type": "string", "description": "External job identifier (e.g. OpenClaw job_id)"},
+                    "vars": {"type": "object", "description": "Optional vars to merge with binding default_vars (overrides defaults)"}
+                },
+                "required": ["binding_key"]
             }
         ),
         Tool(
@@ -449,7 +472,8 @@ async def list_tools() -> list[Tool]:
 def _error_response(
     error: str,
     code: str | None = None,
-    retryable: bool | None = None
+    retryable: bool | None = None,
+    hint: str | None = None,
 ) -> str:
     """Build structured error JSON for MCP tools."""
     out = {"success": False, "error": error}
@@ -457,6 +481,8 @@ def _error_response(
         out["code"] = code
     if retryable is not None:
         out["retryable"] = retryable
+    if hint is not None:
+        out["hint"] = hint
     return json.dumps(out, indent=2, ensure_ascii=False)
 
 
@@ -644,9 +670,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             export_for_ai = arguments.get("export_for_ai", True)
             trajectory = recorder.complete_trajectory()
             if trajectory:
-                recorder.save_trajectory()
+                recorder.save_trajectory(trajectory)
                 if export_for_ai:
-                    ai_prompt = recorder.export_for_ai(trajectory.task_id)
+                    ai_prompt = trajectory.to_ai_prompt_format()
                     return [TextContent(
                         type="text",
                         text=json.dumps({
@@ -686,7 +712,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         elif name == "trajectory_list":
             storage = get_storage()
             limit = arguments.get("limit", 20)
-            items = storage.trajectory_list(limit=limit)
+            since = arguments.get("since")
+            items = storage.trajectory_list(limit=limit, since=since)
             return [TextContent(
                 type="text",
                 text=json.dumps({"trajectories": items}, indent=2, ensure_ascii=False)
@@ -732,6 +759,45 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(
                 type="text",
                 text=json.dumps({"success": True, "deleted": deleted}, indent=2)
+            )]
+
+        elif name == "trajectory_to_script":
+            task_id = arguments.get("task_id")
+            script_task_id = arguments.get("script_task_id")
+            prepend_init = arguments.get("prepend_init", True)
+            stealth = arguments.get("stealth", False)
+            if not task_id:
+                return [TextContent(
+                    type="text",
+                    text=_error_response("task_id is required", code="INVALID_PARAMS", retryable=False)
+                )]
+            storage = get_storage()
+            traj_data = storage.trajectory_load_by_task_id(task_id)
+            if traj_data is None:
+                return [TextContent(
+                    type="text",
+                    text=_error_response(f"No saved trajectory for task_id: {task_id}", code="TRAJECTORY_NOT_FOUND", retryable=False)
+                )]
+            operations = traj_data.get("operations") or []
+            if len(operations) == 0:
+                return [TextContent(
+                    type="text",
+                    text=_error_response(
+                        "Trajectory has no operations, cannot generate valid script. Record browser actions before completing trajectory.",
+                        code="INVALID_TRAJECTORY",
+                        retryable=False,
+                    )
+                )]
+            out_task_id = save_script_from_trajectory(
+                traj_data,
+                storage,
+                task_id=script_task_id or task_id,
+                prepend_init=prepend_init,
+                stealth=stealth,
+            )
+            return [TextContent(
+                type="text",
+                text=json.dumps({"success": True, "task_id": out_task_id, "message": "Script saved from trajectory"}, indent=2, ensure_ascii=False)
             )]
 
         elif name == "script_save":
@@ -794,6 +860,41 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             result = await engine.run_script_resume(session_id, resolution, controller, storage)
             return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
 
+        elif name == "run_script_by_job_id":
+            binding_key = arguments.get("binding_key")
+            if not binding_key:
+                return [TextContent(type="text", text=_error_response("binding_key is required", code="INVALID_PARAMS", retryable=False))]
+            storage = get_storage()
+            binding = storage.script_binding_get(binding_key)
+            if binding is None:
+                return [TextContent(
+                    type="text",
+                    text=_error_response(
+                        f"No binding for key: {binding_key}. Use script_binding_set to bind job_id to script first.",
+                        code="SCRIPT_BINDING_NOT_FOUND",
+                        retryable=False,
+                    )
+                )]
+            script_task_id = binding.get("script_task_id")
+            default_vars = binding.get("default_vars") or {}
+            vars_arg = arguments.get("vars") or {}
+            vars_map = {**default_vars, **vars_arg}
+            script = storage.script_load(script_task_id)
+            if script is None:
+                return [TextContent(
+                    type="text",
+                    text=_error_response(
+                        f"No script for task_id: {script_task_id}",
+                        code="SCRIPT_NOT_FOUND",
+                        retryable=False,
+                        hint="Script was deleted. Re-run trajectory_to_script(script_task_id) to regenerate from trajectory, then retry run_script_by_job_id.",
+                    )
+                )]
+            controller = get_controller()
+            engine = ScriptEngine(vars_map=vars_map)
+            result = await engine.run_script_start(script, controller, storage)
+            return [TextContent(type="text", text=json.dumps(result, indent=2, ensure_ascii=False))]
+
         elif name == "dfu_save":
             dfu_id = arguments.get("dfu_id")
             name_ = arguments.get("name")
@@ -848,7 +949,18 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             script_task_id = arguments.get("script_task_id")
             if not binding_key or not script_task_id:
                 return [TextContent(type="text", text=_error_response("binding_key and script_task_id are required", code="INVALID_PARAMS", retryable=False))]
-            get_storage().script_binding_set(
+            storage = get_storage()
+            script = storage.script_load(script_task_id)
+            if script is None:
+                return [TextContent(
+                    type="text",
+                    text=_error_response(
+                        f"No script for task_id: {script_task_id}. Create script via trajectory_to_script or script_save first.",
+                        code="SCRIPT_NOT_FOUND",
+                        retryable=False,
+                    )
+                )]
+            storage.script_binding_set(
                 binding_key,
                 script_task_id=script_task_id,
                 description=arguments.get("description", "") or "",

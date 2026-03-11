@@ -1,12 +1,11 @@
 """
 Trajectory Recorder - Records complete operation trajectories.
 Stores and manages operation records for replay and analysis.
+All persistence uses TrajectoryStore (database); no file storage.
 """
 
-import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional, TYPE_CHECKING
-from pathlib import Path
 
 from .controller import OperationRecord, BrowserController
 
@@ -83,18 +82,16 @@ class TrajectoryRecorder:
     """
     Records and manages operation trajectories.
     Integrates with BrowserController to capture all operations.
+    All persistence uses TrajectoryStore (database); trajectory_store is required.
     """
 
     def __init__(
         self,
-        trajectories_dir: str = "trajectories",
+        trajectory_store: "TrajectoryStore",
         auto_save: bool = True,
-        trajectory_store: Optional["TrajectoryStore"] = None,
     ):
-        self.trajectories_dir = Path(trajectories_dir)
-        self.trajectories_dir.mkdir(parents=True, exist_ok=True)
-        self.auto_save = auto_save
         self.trajectory_store = trajectory_store
+        self.auto_save = auto_save
         self._current_trajectory: Optional[Trajectory] = None
         self._controller: Optional[BrowserController] = None
 
@@ -142,7 +139,7 @@ class TrajectoryRecorder:
         """Get the current trajectory."""
         return self._current_trajectory
 
-    def complete_trajectory(self) -> Trajectory:
+    def complete_trajectory(self) -> Optional[Trajectory]:
         """Complete the current trajectory and return it."""
         if self._current_trajectory:
             self._current_trajectory.complete()
@@ -160,8 +157,7 @@ class TrajectoryRecorder:
                         record = self._dict_to_record(op_dict)
                         self._current_trajectory.add_operation(record)
 
-            if self.auto_save:
-                self.save_trajectory()
+            # Persistence on complete is handled by MCP (trajectory_complete) to avoid double-save
 
         trajectory = self._current_trajectory
         self._current_trajectory = None
@@ -171,16 +167,17 @@ class TrajectoryRecorder:
         """Convert dictionary back to OperationRecord."""
         from .controller import PageState
 
+        ps = data.get("page_state") or {}
         page_state = PageState(
-            url=data['page_state']['url'],
-            title=data['page_state']['title']
+            url=ps.get("url", ""),
+            title=ps.get("title", ""),
         )
 
         return OperationRecord(
-            step=data['step'],
-            action=data['action'],
-            params=data['params'],
-            result=data['result'],
+            step=data.get("step", 0),
+            action=data.get("action", ""),
+            params=data.get("params") or {},
+            result=data.get("result") or {},
             page_state=page_state,
             screenshot=data.get('screenshot'),
             error=data.get('error'),
@@ -188,80 +185,55 @@ class TrajectoryRecorder:
             selector_candidates=data.get('selector_candidates'),
         )
 
-    def save_trajectory(self, trajectory: Optional[Trajectory] = None) -> str:
+    def save_trajectory(self, trajectory: Optional[Trajectory] = None) -> int:
         """
-        Save trajectory to file and optionally to TrajectoryStore (DB).
+        Save trajectory to TrajectoryStore (database); no file storage.
 
         Returns:
-            File path where trajectory was saved
+            Trajectory id from database
         """
         traj = trajectory or self._current_trajectory
         if not traj:
             raise ValueError("No trajectory to save")
 
-        filename = f"{traj.task_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        filepath = self.trajectories_dir / filename
-
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(traj.to_dict(), f, indent=2, ensure_ascii=False)
-
-        if self.trajectory_store:
-            self.trajectory_store.trajectory_save(
-                task_id=traj.task_id,
-                goal=traj.goal,
-                operations=traj.operations,
-                metadata=traj.metadata,
-            )
-
-        return str(filepath)
-
-    def load_trajectory(self, filepath: str) -> Trajectory:
-        """Load trajectory from file."""
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        trajectory = Trajectory(data['task_id'], data['goal'])
-        trajectory.start_time = datetime.fromisoformat(data['start_time'])
-        if data.get('end_time'):
-            trajectory.end_time = datetime.fromisoformat(data['end_time'])
-        trajectory.metadata = data['metadata']
-
-        for op_data in data['operations']:
-            record = self._dict_to_record(op_data)
-            trajectory.operations.append(record.to_dict())
-
-        return trajectory
+        trajectory_id = self.trajectory_store.trajectory_save(
+            task_id=traj.task_id,
+            goal=traj.goal,
+            operations=traj.operations,
+            metadata=traj.metadata,
+        )
+        return trajectory_id
 
     def load_trajectory_by_task_id(self, task_id: str) -> Optional[Trajectory]:
-        """Load the most recently saved trajectory for the given task_id. Returns None if none found."""
-        files = sorted(
-            self.trajectories_dir.glob(f"{task_id}_*.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True
-        )
-        if not files:
+        """Load the most recently saved trajectory for the given task_id from DB. Returns None if none found."""
+        data = self.trajectory_store.trajectory_load_by_task_id(task_id)
+        if data is None:
             return None
-        return self.load_trajectory(str(files[0]))
+        trajectory = Trajectory(data["task_id"], data["goal"])
+        trajectory.operations = data.get("operations", [])
+        trajectory.metadata = data.get("metadata") or {}
+        return trajectory
 
-    def list_trajectories(self) -> List[Dict[str, Any]]:
-        """List all saved trajectories."""
-        trajectories = []
-        for f in self.trajectories_dir.glob("*.json"):
-            with open(f, 'r', encoding='utf-8') as file:
-                data = json.load(file)
-                trajectories.append({
-                    "task_id": data['task_id'],
-                    "goal": data['goal'],
-                    "file": str(f),
-                    "saved_at": f.stat().st_mtime,
-                    "operations_count": len(data.get("operations", []))
-                })
-        return sorted(trajectories, key=lambda x: x['saved_at'], reverse=True)
+    def list_trajectories(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """List saved trajectories from database."""
+        items = self.trajectory_store.trajectory_list(limit=limit)
+        return [
+            {
+                "id": r["id"],
+                "task_id": r["task_id"],
+                "goal": r["goal"],
+                "created_at": r["created_at"],
+            }
+            for r in items
+        ]
 
-    def delete_trajectory(self, task_id: str) -> bool:
-        """Delete a trajectory by task_id."""
-        deleted = False
-        for f in self.trajectories_dir.glob(f"{task_id}_*"):
-            f.unlink()
-            deleted = True
-        return deleted
+    def delete_trajectory(self, task_id: str) -> int:
+        """Delete trajectories by task_id from database. Returns number deleted."""
+        return self.trajectory_store.trajectory_delete_by_task_id(task_id)
+
+    def export_for_ai(self, task_id: str) -> str:
+        """Load trajectory by task_id from DB and return AI prompt format."""
+        trajectory = self.load_trajectory_by_task_id(task_id)
+        if trajectory is None:
+            raise ValueError(f"No trajectory found for task_id: {task_id}")
+        return trajectory.to_ai_prompt_format()

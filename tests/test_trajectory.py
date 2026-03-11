@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from zerotoken.trajectory import Trajectory, TrajectoryRecorder
 from zerotoken.controller import OperationRecord, PageState, BrowserController
+from zerotoken.storage_sqlite import SQLiteStorage
 
 
 class TestTrajectory:
@@ -132,8 +133,10 @@ class TestTrajectoryRecorder:
 
     @pytest.fixture
     def recorder(self, tmp_path):
-        """Create recorder with temp directory."""
-        return TrajectoryRecorder(trajectories_dir=str(tmp_path / "trajectories"), auto_save=False)
+        """Create recorder with SQLite storage."""
+        db_path = str(tmp_path / "test.db")
+        store = SQLiteStorage(db_path)
+        return TrajectoryRecorder(trajectory_store=store, auto_save=False)
 
     @pytest.fixture
     def controller(self):
@@ -146,7 +149,7 @@ class TestTrajectoryRecorder:
 
     def test_create_recorder(self, recorder):
         """Test creating recorder."""
-        assert recorder.trajectories_dir.exists()
+        assert recorder.trajectory_store is not None
         assert recorder._current_trajectory is None
 
     def test_bind_controller(self, recorder, controller):
@@ -290,7 +293,7 @@ class TestTrajectoryRecorder:
         assert len(completed.operations) == 1
 
     def test_save_trajectory(self, recorder, tmp_path):
-        """Test saving trajectory."""
+        """Test saving trajectory to database."""
         traj = recorder.start_trajectory(task_id="test_001", goal="Test goal")
 
         page_state = PageState(url="https://example.com", title="Example")
@@ -303,18 +306,18 @@ class TestTrajectoryRecorder:
         )
         recorder.record_operation(record)
 
-        filepath = recorder.save_trajectory(traj)
+        trajectory_id = recorder.save_trajectory(traj)
 
-        assert filepath is not None
-        assert Path(filepath).exists()
+        assert trajectory_id is not None
+        assert trajectory_id > 0
 
     def test_save_trajectory_no_trajectory(self, recorder):
         """Test saving without trajectory raises error."""
         with pytest.raises(ValueError, match="No trajectory to save"):
             recorder.save_trajectory()
 
-    def test_save_trajectory_creates_json_file(self, recorder, tmp_path):
-        """Test saving trajectory creates JSON file."""
+    def test_save_trajectory_persists_to_db(self, recorder, tmp_path):
+        """Test saving trajectory persists to database."""
         traj = recorder.start_trajectory(task_id="test_001", goal="Test goal")
         page_state = PageState(url="https://example.com", title="Example")
         record = OperationRecord(
@@ -325,16 +328,12 @@ class TestTrajectoryRecorder:
             page_state=page_state
         )
         recorder.record_operation(record)
+        recorder.save_trajectory(traj)
 
-        filepath = recorder.save_trajectory(traj)
-
-        # Verify JSON content
-        with open(filepath, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        assert data["task_id"] == "test_001"
-        assert data["goal"] == "Test goal"
-        assert len(data["operations"]) == 1
+        items = recorder.list_trajectories()
+        assert len(items) == 1
+        assert items[0]["task_id"] == "test_001"
+        assert items[0]["goal"] == "Test goal"
 
     def test_list_trajectories_empty(self, recorder):
         """Test listing trajectories when empty."""
@@ -342,8 +341,7 @@ class TestTrajectoryRecorder:
         assert trajectories == []
 
     def test_list_trajectories(self, recorder, tmp_path):
-        """Test listing trajectories."""
-        # Create and save a trajectory
+        """Test listing trajectories from database."""
         recorder.start_trajectory(task_id="test_001", goal="Test goal 1")
         page_state = PageState(url="https://example.com", title="Example")
         record = OperationRecord(
@@ -360,11 +358,10 @@ class TestTrajectoryRecorder:
 
         assert len(trajectories) == 1
         assert trajectories[0]["task_id"] == "test_001"
-        assert trajectories[0]["operations_count"] == 1
+        assert trajectories[0]["goal"] == "Test goal 1"
 
     def test_delete_trajectory(self, recorder, tmp_path):
-        """Test deleting trajectory."""
-        # Create and save a trajectory
+        """Test deleting trajectory from database."""
         recorder.start_trajectory(task_id="test_001", goal="Test goal")
         page_state = PageState(url="https://example.com", title="Example")
         record = OperationRecord(
@@ -375,42 +372,19 @@ class TestTrajectoryRecorder:
             page_state=page_state
         )
         recorder.record_operation(record)
-        filepath = recorder.save_trajectory()
+        recorder.save_trajectory()
 
-        # Delete
-        result = recorder.delete_trajectory("test_001")
+        deleted = recorder.delete_trajectory("test_001")
 
-        assert result is True
-        assert not Path(filepath).exists()
-
-    def test_load_trajectory(self, recorder, tmp_path):
-        """Test loading trajectory."""
-        # Create and save a trajectory
-        recorder.start_trajectory(task_id="test_001", goal="Test goal")
-        page_state = PageState(url="https://example.com", title="Example")
-        record = OperationRecord(
-            step=1,
-            action="open",
-            params={"url": "https://example.com"},
-            result={"success": True},
-            page_state=page_state
-        )
-        recorder.record_operation(record)
-        filepath = recorder.save_trajectory()
-
-        # Load
-        loaded = recorder.load_trajectory(filepath)
-
-        assert loaded.task_id == "test_001"
-        assert loaded.goal == "Test goal"
-        assert len(loaded.operations) == 1
+        assert deleted >= 1
+        assert recorder.load_trajectory_by_task_id("test_001") is None
 
     def test_load_trajectory_by_task_id_nonexistent(self, recorder):
         """load_trajectory_by_task_id 对不存在的 task_id 返回 None"""
         assert recorder.load_trajectory_by_task_id("nonexistent_id") is None
 
     def test_load_trajectory_by_task_id_success(self, recorder, tmp_path):
-        """load_trajectory_by_task_id 能加载已保存的轨迹并返回 Trajectory"""
+        """load_trajectory_by_task_id loads saved trajectory from DB and returns Trajectory."""
         recorder.start_trajectory(task_id="task_abc", goal="Test goal")
         page_state = PageState(url="https://example.com", title="Example")
         record = OperationRecord(
@@ -429,6 +403,24 @@ class TestTrajectoryRecorder:
         assert loaded.goal == "Test goal"
         assert len(loaded.operations) == 1
         assert "Task Goal" in loaded.to_ai_prompt_format()
+
+    def test_export_for_ai(self, recorder, tmp_path):
+        """export_for_ai loads from DB and returns AI prompt format."""
+        recorder.start_trajectory(task_id="export_test", goal="Export goal")
+        page_state = PageState(url="https://example.com", title="Example")
+        record = OperationRecord(
+            step=1,
+            action="open",
+            params={"url": "https://example.com"},
+            result={"success": True},
+            page_state=page_state
+        )
+        recorder.record_operation(record)
+        recorder.save_trajectory()
+
+        ai_prompt = recorder.export_for_ai("export_test")
+        assert "Task Goal: Export goal" in ai_prompt
+        assert "[Step 1]" in ai_prompt
 
     def test_dict_to_record(self, recorder):
         """Test converting dict to OperationRecord."""

@@ -67,8 +67,8 @@ def test_similarity_score_same_tag_and_text():
 
 @pytest.mark.asyncio
 async def test_relocate_no_stored_returns_none(tmp_path):
-    from zerotoken.adaptive_storage import AdaptiveStorage
-    storage = AdaptiveStorage(db_path=str(tmp_path / "t.db"))
+    from zerotoken.storage_sqlite import SQLiteStorage
+    storage = SQLiteStorage(db_path=str(tmp_path / "t.db"))
     from playwright.async_api import async_playwright
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -81,8 +81,8 @@ async def test_relocate_no_stored_returns_none(tmp_path):
 
 @pytest.mark.asyncio
 async def test_relocate_finds_element_when_stored(tmp_path):
-    from zerotoken.adaptive_storage import AdaptiveStorage
-    storage = AdaptiveStorage(db_path=str(tmp_path / "t.db"))
+    from zerotoken.storage_sqlite import SQLiteStorage
+    storage = SQLiteStorage(db_path=str(tmp_path / "t.db"))
     SAMPLE = """
     <!DOCTYPE html><html><body>
     <div><a id="link1" href="#">Product 1</a></div>
@@ -97,7 +97,7 @@ async def test_relocate_finds_element_when_stored(tmp_path):
         assert el is not None
         fp = await extract_fingerprint(el, page)
         assert fp is not None
-        storage.save("example.com", "#link1", fp)
+        storage.fingerprint_save("example.com", "#link1", fp)
         await browser.close()
 
     async with async_playwright() as p:
@@ -113,13 +113,12 @@ async def test_relocate_finds_element_when_stored(tmp_path):
 async def test_controller_adaptive_flow(tmp_path):
     """Integration: Controller click with auto_save then adaptive after HTML change."""
     from zerotoken.controller import BrowserController
-    from zerotoken.adaptive_storage import AdaptiveStorage
+    from zerotoken.storage_sqlite import SQLiteStorage
 
-    storage = AdaptiveStorage(db_path=str(tmp_path / "ctrl.db"))
+    storage = SQLiteStorage(db_path=str(tmp_path / "ctrl.db"))
     controller = BrowserController()
     controller._config["enable_adaptive"] = True
-    controller._config["adaptive_storage_path"] = str(tmp_path / "ctrl.db")
-    controller._adaptive_storage = storage
+    controller.set_adaptive_store(storage)
 
     await controller.start(headless=True)
     try:
@@ -129,7 +128,7 @@ async def test_controller_adaptive_flow(tmp_path):
         record1 = await controller.click("#submit", auto_save=True)
         assert record1.result.get("success") is True
         domain = "default"
-        assert storage.load(domain, "#submit") is not None
+        assert storage.fingerprint_load(domain, "#submit") is not None
 
         await controller._page.set_content(
             "<!DOCTYPE html><html><body><button class='btn-primary' data-action='submit'>Submit</button></body></html>"

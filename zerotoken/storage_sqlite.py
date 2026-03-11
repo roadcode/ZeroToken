@@ -1,14 +1,23 @@
 """
-SQLite implementation of ScriptStore, TrajectoryStore, SessionStore.
-Single DB file (e.g. zerotoken.db); tables: scripts, trajectories, session_headers, session_steps.
+SQLite implementation of ScriptStore, TrajectoryStore, SessionStore, AdaptiveStore.
+Single DB file (e.g. zerotoken.db); tables: scripts, trajectories, session_headers, session_steps, fingerprints.
 """
 import json
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .storage import ScriptStore, TrajectoryStore, SessionStore, DFUStore, SessionRuntimeStore, ScriptBindingStore
+from .storage import (
+    ScriptStore,
+    TrajectoryStore,
+    SessionStore,
+    DFUStore,
+    SessionRuntimeStore,
+    ScriptBindingStore,
+    AdaptiveStore,
+)
 
 _RUNTIME_UNSET = object()
 
@@ -23,7 +32,15 @@ def _json_deserializer(s: Optional[str]) -> Any:
     return json.loads(s)
 
 
-class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, SessionRuntimeStore, ScriptBindingStore):
+class SQLiteStorage(
+    ScriptStore,
+    TrajectoryStore,
+    SessionStore,
+    DFUStore,
+    SessionRuntimeStore,
+    ScriptBindingStore,
+    AdaptiveStore,
+):
     """Single SQLite-backed storage for scripts, trajectories, and sessions."""
 
     def __init__(self, db_path: str = "zerotoken.db"):
@@ -118,6 +135,15 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, Sessio
                 default_vars_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )
+        """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS fingerprints (
+                domain TEXT NOT NULL,
+                identifier TEXT NOT NULL,
+                fingerprint_json TEXT NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY (domain, identifier)
             )
         """)
         self.conn.commit()
@@ -229,6 +255,42 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, Sessio
         self.conn.commit()
         return cur.rowcount > 0
 
+    # --- AdaptiveStore ---
+    def fingerprint_save(
+        self, domain: str, identifier: str, fingerprint_dict: Dict[str, Any]
+    ) -> None:
+        updated_at = time.time()
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO fingerprints (domain, identifier, fingerprint_json, updated_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (domain, identifier, _json_serializer(fingerprint_dict), updated_at),
+        )
+        self.conn.commit()
+
+    def fingerprint_load(
+        self, domain: str, identifier: str
+    ) -> Optional[Dict[str, Any]]:
+        cur = self.conn.cursor()
+        row = cur.execute(
+            "SELECT fingerprint_json FROM fingerprints WHERE domain = ? AND identifier = ?",
+            (domain, identifier),
+        ).fetchone()
+        if row is None:
+            return None
+        return _json_deserializer(row["fingerprint_json"])
+
+    def fingerprint_delete(self, domain: str, identifier: str) -> bool:
+        cur = self.conn.cursor()
+        cur.execute(
+            "DELETE FROM fingerprints WHERE domain = ? AND identifier = ?",
+            (domain, identifier),
+        )
+        self.conn.commit()
+        return cur.rowcount > 0
+
     def script_load(self, task_id: str) -> Optional[Dict[str, Any]]:
         cur = self.conn.cursor()
         cur.execute(
@@ -311,10 +373,25 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, Sessio
             "created_at": row["created_at"],
         }
 
-    def trajectory_list(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def trajectory_list(
+        self, limit: int = 100, since: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
         cur = self.conn.cursor()
-        cur.execute("SELECT id, task_id, goal, created_at FROM trajectories ORDER BY id DESC LIMIT ?", (limit,))
-        return [{"id": r["id"], "task_id": r["task_id"], "goal": r["goal"], "created_at": r["created_at"]} for r in cur.fetchall()]
+        if since is not None:
+            since_iso = datetime.utcfromtimestamp(since).strftime("%Y-%m-%dT%H:%M:%SZ")
+            cur.execute(
+                "SELECT id, task_id, goal, created_at FROM trajectories WHERE created_at >= ? ORDER BY id DESC LIMIT ?",
+                (since_iso, limit),
+            )
+        else:
+            cur.execute(
+                "SELECT id, task_id, goal, created_at FROM trajectories ORDER BY id DESC LIMIT ?",
+                (limit,),
+            )
+        return [
+            {"id": r["id"], "task_id": r["task_id"], "goal": r["goal"], "created_at": r["created_at"]}
+            for r in cur.fetchall()
+        ]
 
     def trajectory_delete(self, trajectory_id: int) -> bool:
         cur = self.conn.cursor()
@@ -514,6 +591,7 @@ class SQLiteStorage(ScriptStore, TrajectoryStore, SessionStore, DFUStore, Sessio
             "updated_at": row["updated_at"],
         }
 
+    # Note: runtime_update uses read-modify-write; safe for single-process MCP (stdio serializes calls).
     def runtime_update(
         self,
         session_id: str,

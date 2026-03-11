@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.AMOS144/zerotoken",
+  "title": "ZeroToken",
+  "description": "Record once, automate forever. Lightweight MCP for AI agent browser automation with trajectory recording and low-token script replay.",
+  "repository": {
+    "url": "https://github.com/AMOS144/zerotoken",
+    "source": "github"
+  },
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "zerotoken",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

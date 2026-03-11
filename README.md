@@ -1,5 +1,7 @@
 # ZeroToken
 
+<!-- mcp-name: io.github.AMOS144/zerotoken -->
+
 [![CI](https://github.com/AMOS144/zerotoken/actions/workflows/ci.yml/badge.svg)](https://github.com/AMOS144/zerotoken/actions/workflows/ci.yml)
 
 **ZeroToken - Record once, automate forever.**
@@ -12,14 +14,14 @@
 
 ZeroToken 推荐与 OpenClaw 搭配，用作浏览器执行层与轨迹重放引擎。
 
-- **MCP 已通过 Marketplace 安装时**：在支持 MCP 的客户端（如 Cursor / OpenClaw）中启用名为 `zerotoken` 的 MCP server，然后在 OpenClaw 安装 `zerotoken-openclaw` Skill（见 `docs/skills.md`），即可在工作流中直接使用 ZeroToken 的浏览器工具和轨迹脚本。
+- **MCPorter / ClawHub 安装**：通过 MCPorter 或 OpenClaw 的 ClawHub 安装 ZeroToken MCP，配置会自动写入 `openclaw.json`。安装后启用名为 `zerotoken` 的 MCP server，再安装 `zerotoken-openclaw` Skill（见 `docs/skills.md`）即可使用。
+- **MCP 已通过 Marketplace 安装时**：在支持 MCP 的客户端（如 Cursor / OpenClaw）中启用名为 `zerotoken` 的 MCP server，然后在 OpenClaw 安装 `zerotoken-openclaw` Skill，即可在工作流中直接使用 ZeroToken 的浏览器工具和轨迹脚本。
 - **本地开发 / 调试场景**：按照下文「安装」「快速开始」章节启动本地 `mcp_server.py`，并在客户端中将其注册为 id 为 `zerotoken` 的 MCP server，再搭配 `zerotoken-openclaw` Skill 使用。
 
 典型工作流示例和脚本格式说明见：
 
 - `docs/skills.md`：OpenClaw Skill 安装与约定
 - `skills/zerotoken-openclaw/SKILL.md`：教会 Agent 何时录制轨迹、何时生成脚本、如何以低 Token 成本重放
-- `docs/examples/*.md`：基础示例与稳定性测试示例
 
 ## 核心理念
 
@@ -171,6 +173,36 @@ graph TB
 
 ## 安装
 
+### 通过 MCPorter 安装（OpenClaw 推荐）
+
+ZeroToken 提供 `server.json`，与 MCP Registry 及 MCPorter 兼容。通过 MCPorter 可自动发现、安装并配置到 OpenClaw：
+
+```bash
+# 安装 MCPorter
+npm install -g mcporter
+
+# 搜索并安装 ZeroToken（安装到 OpenClaw）
+mcporter search zerotoken
+mcporter install zerotoken --target openclaw --configure
+```
+
+若 MCPorter 暂未收录，可手动在 `~/.openclaw/openclaw.json` 的 `mcpServers` 中添加：
+
+```json
+{
+  "mcpServers": {
+    "zerotoken": {
+      "command": "zerotoken-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+安装后需执行 `playwright install chromium` 安装浏览器依赖。若使用 uv，将 `command` 改为 `uv`、`args` 改为 `["run", "zerotoken-mcp"]`。
+
+### 本地开发 / pip 安装
+
 ```bash
 # 克隆项目
 git clone https://github.com/AMOS144/zerotoken.git
@@ -178,6 +210,9 @@ cd zerotoken
 
 # 安装依赖
 uv sync
+
+# 或 pip 安装
+pip install zerotoken
 
 # 安装 Playwright 浏览器
 playwright install chromium
@@ -335,9 +370,8 @@ zerotoken/
 │   ├── selector.py           # SmartSelector - 智能选择器
 │   ├── wait_strategy.py      # SmartWait - 等待策略
 │   └── recovery.py           # ErrorRecovery - 错误恢复
-├── trajectories/             # 轨迹文件存储
+├── zerotoken.db              # SQLite 数据库（脚本/轨迹/会话，运行时生成）
 ├── mcp_server.py             # MCP Server 入口
-├── examples.py               # 使用示例
 └── README.md
 ```
 
@@ -347,8 +381,6 @@ zerotoken/
 2. **RPA 流程自动化** - 重复性网页操作录制回放
 3. **数据采集** - 定时抓取网页数据
 4. **自动化测试** - 记录测试步骤并回放
-
-更多示例见根目录 `examples.py`、`examples_stability.py`。
 
 **OpenClaw 配套 Skill**：见 [docs/skills.md](docs/skills.md)，用于定时/重复任务时按轨迹重放、降低 Token 消耗。
 

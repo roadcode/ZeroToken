@@ -33,7 +33,75 @@ STEALTH_INIT_SCRIPT = """
   } catch (e) {}
   try {
     if (!navigator.plugins || navigator.plugins.length === 0) {
+      const makePlugin = (name, filename, description) => ({
+        name, filename, description,
+        length: 1,
+        item: function(i) { return i === 0 ? { type: 'application/pdf', suffixes: 'pdf', description: '', enabledPlugin: this } : null; },
+        namedItem: function() { return null; }
+      });
+      const plugins = [
+        makePlugin('Chrome PDF Plugin', 'internal-pdf-viewer', 'Portable Document Format'),
+        makePlugin('Chrome PDF Viewer', 'mhjfbmdgcfjbbpaeojofohoefgiehjai', ''),
+        makePlugin('Native Client', 'internal-nacl-plugin', '')
+      ];
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => ({ length: 3, item: i => plugins[i] || null, namedItem: n => plugins.find(p => p.name === n) || null }),
+        configurable: true,
+        enumerable: true
+      });
     }
+  } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'languages', {
+      get: () => ['zh-CN', 'zh', 'en'],
+      configurable: true,
+      enumerable: true
+    });
+  } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'platform', {
+      get: () => 'Win32',
+      configurable: true,
+      enumerable: true
+    });
+  } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'hardwareConcurrency', {
+      get: () => 8,
+      configurable: true,
+      enumerable: true
+    });
+  } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'deviceMemory', {
+      get: () => 8,
+      configurable: true,
+      enumerable: true
+    });
+  } catch (e) {}
+  try {
+    Object.defineProperty(navigator, 'maxTouchPoints', {
+      get: () => 0,
+      configurable: true,
+      enumerable: true
+    });
+  } catch (e) {}
+  try {
+    const WEBGL_VENDOR = 'Google Inc. (NVIDIA)';
+    const WEBGL_RENDERER = 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1060 Direct3D11 vs_5_0 ps_5_0)';
+    const origGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+      const ctx = origGetContext.apply(this, [type, ...args]);
+      if (ctx && (type === 'webgl' || type === 'webgl2')) {
+        const origGetParam = ctx.getParameter.bind(ctx);
+        ctx.getParameter = function(pname) {
+          if (pname === 37445) return WEBGL_VENDOR;
+          if (pname === 37446) return WEBGL_RENDERER;
+          return origGetParam(pname);
+        };
+      }
+      return ctx;
+    };
   } catch (e) {}
 })();
 """

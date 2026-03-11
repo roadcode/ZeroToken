@@ -130,7 +130,7 @@ AI Agent (ReAct 模式)
 ## MCP 工具列表
 
 ### Browser Tools
-- `browser_init` - 初始化浏览器；可选 **stealth**（默认 false）：为 true 时启用反检测（启动参数 + 指纹伪装），适合易被云盾/反爬拦截的场景
+- `browser_init` - 初始化浏览器；可选 **stealth**（默认 false）：为 true 时启用反检测，包含：启动参数（--disable-blink-features=AutomationControlled 等）、navigator 指纹伪装（webdriver、plugins、languages、platform、hardwareConcurrency、deviceMemory、maxTouchPoints）、Sec-CH-UA 等 HTTP 头、WebGL 指纹伪装（UNMASKED_VENDOR/RENDERER），适合易被云盾/反爬拦截的场景（如 B 站、小红书）
 - `browser_close` - 关闭浏览器
 - `browser_open` / `browser_click` / `browser_input` / `browser_get_text` / `browser_get_html` / `browser_wait_for` / `browser_extract_data` - 原子操作，返回 OperationRecord
 - 上述返回 record 的工具支持可选参数 **include_screenshot**（默认 true）；设为 false 时响应中不包含截图，可减少 token
@@ -141,7 +141,7 @@ AI Agent (ReAct 模式)
 - `trajectory_start` - 开始轨迹记录
 - `trajectory_complete` - 完成轨迹并导出（含 fuzzy_point 的 AI 提示）
 - `trajectory_get` - 获取当前未结束轨迹（format: json | ai_prompt）
-- `trajectory_list` - 列出已保存轨迹（可选 limit、since），返回 task_id、goal、operations_count、file、saved_at
+- `trajectory_list` - 列出已保存轨迹（可选 limit、since），返回 id、task_id、goal、created_at
 - `trajectory_load` - 按 task_id 加载已保存轨迹（format: ai_prompt | json），供 Skill 生成脚本等使用
 - `trajectory_delete` - 按 task_id 删除已保存轨迹，防止记录过多；建议先 `trajectory_list` 再对不需要的 task_id 调用
 
@@ -171,7 +171,7 @@ ai_prompt = result["ai_prompt"]
 
 # 事后按需获取已保存轨迹（供 Skill 等使用）
 list_result = await mcp_call("trajectory_list", {"limit": 20})
-# list_result["trajectories"]: [{ task_id, goal, operations_count, file, saved_at }, ...]
+# list_result["trajectories"]: [{ id, task_id, goal, created_at }, ...]
 load_result = await mcp_call("trajectory_load", {"task_id": "login_demo", "format": "ai_prompt"})
 # load_result["ai_prompt"] 或 load_result["trajectory"]（format=json 时）
 ```
@@ -187,7 +187,7 @@ load_result = await mcp_call("trajectory_load", {"task_id": "login_demo", "forma
 - BrowserController 必须保持单例
 - 截图数据较大时，可传 `include_screenshot: false` 减少响应体积；轨迹仍会完整记录
 - 建议通过 `trajectory_list` 查看已保存轨迹，对不需要的 `task_id` 调用 `trajectory_delete`，避免本地记录过多
-- 自适应定位：对关键元素首次操作时传 `auto_save: true`，网站改版后同一选择器失效时传 `adaptive: true` 可自动按指纹重定位；指纹存于本地 SQLite（默认 `zerotoken_adaptive.db`）
+- 自适应定位：对关键元素首次操作时传 `auto_save: true`，网站改版后同一选择器失效时传 `adaptive: true` 可自动按指纹重定位；指纹存于主库 `zerotoken.db` 的 fingerprints 表
 
 ## 扩展方向
 

@@ -61,13 +61,25 @@ class TrajectoryStore(ABC):
         ...
 
     @abstractmethod
-    def trajectory_list(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """List trajectories (id, task_id, goal, created_at)."""
+    def trajectory_list(
+        self, limit: int = 100, since: Optional[float] = None
+    ) -> List[Dict[str, Any]]:
+        """List trajectories (id, task_id, goal, created_at). since: Unix timestamp, only return created_at >= since."""
         ...
 
     @abstractmethod
     def trajectory_delete(self, trajectory_id: int) -> bool:
         """Delete trajectory. Returns True if deleted."""
+        ...
+
+    @abstractmethod
+    def trajectory_load_by_task_id(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Load latest trajectory with given task_id. Returns None if not found."""
+        ...
+
+    @abstractmethod
+    def trajectory_delete_by_task_id(self, task_id: str) -> int:
+        """Delete all trajectories with given task_id. Returns number deleted."""
         ...
 
 
@@ -176,6 +188,29 @@ class SessionRuntimeStore(ABC):
         vars: Any = _RUNTIME_UNSET,
     ) -> None:
         """Update runtime state fields for a session."""
+        ...
+
+
+class AdaptiveStore(ABC):
+    """Abstract store for element fingerprints (domain, identifier) for adaptive relocation."""
+
+    @abstractmethod
+    def fingerprint_save(
+        self, domain: str, identifier: str, fingerprint_dict: Dict[str, Any]
+    ) -> None:
+        """Save or overwrite fingerprint for (domain, identifier)."""
+        ...
+
+    @abstractmethod
+    def fingerprint_load(
+        self, domain: str, identifier: str
+    ) -> Optional[Dict[str, Any]]:
+        """Load fingerprint for (domain, identifier). Returns None if not found."""
+        ...
+
+    @abstractmethod
+    def fingerprint_delete(self, domain: str, identifier: str) -> bool:
+        """Remove fingerprint. Returns True if a row was deleted."""
         ...
 
 

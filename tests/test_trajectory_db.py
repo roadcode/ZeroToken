@@ -23,7 +23,7 @@ def db_path():
 def test_trajectory_save_to_db_includes_selector_candidates(db_path):
     """After completing a trajectory with selector_candidates, DB has one record with selector_candidates in operations."""
     store = SQLiteStorage(db_path)
-    recorder = TrajectoryRecorder(trajectories_dir=tempfile.mkdtemp(), auto_save=False, trajectory_store=store)
+    recorder = TrajectoryRecorder(trajectory_store=store, auto_save=False)
     traj = recorder.start_trajectory("task_db_1", "Test goal")
     record = OperationRecord(
         step=1,

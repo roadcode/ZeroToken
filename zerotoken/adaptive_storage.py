@@ -1,6 +1,7 @@
 """
 Adaptive element fingerprint storage (SQLite).
 Stores and loads fingerprints by (domain, identifier) for adaptive relocation.
+Implements AdaptiveStore; can use a separate DB file for backward compatibility.
 """
 
 import json
@@ -8,8 +9,10 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .storage import AdaptiveStore
 
-class AdaptiveStorage:
+
+class AdaptiveStorage(AdaptiveStore):
     """SQLite storage for element fingerprints keyed by (domain, identifier)."""
 
     def __init__(self, db_path: Optional[str] = None):
@@ -65,3 +68,19 @@ class AdaptiveStorage:
                 (domain, identifier),
             )
             return cur.rowcount > 0
+
+    def fingerprint_save(
+        self, domain: str, identifier: str, fingerprint_dict: Dict[str, Any]
+    ) -> None:
+        """AdaptiveStore interface: save fingerprint."""
+        self.save(domain, identifier, fingerprint_dict)
+
+    def fingerprint_load(
+        self, domain: str, identifier: str
+    ) -> Optional[Dict[str, Any]]:
+        """AdaptiveStore interface: load fingerprint."""
+        return self.load(domain, identifier)
+
+    def fingerprint_delete(self, domain: str, identifier: str) -> bool:
+        """AdaptiveStore interface: delete fingerprint."""
+        return self.delete(domain, identifier)

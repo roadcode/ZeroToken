@@ -6,6 +6,7 @@ Integrated with stability modules: SmartSelector, SmartWait, ErrorRecovery.
 
 import asyncio
 import base64
+import json
 from datetime import datetime
 from typing import Optional, Any, Dict, List, Literal, Callable
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page, ElementHandle
@@ -15,7 +16,7 @@ from .selector import SmartSelectorGenerator, SmartSelector
 from .wait_strategy import SmartWait, WaitConfig, WaitCondition
 from .recovery import ErrorRecovery, RetryWrapper
 from .adaptive import extract_fingerprint, relocate, _domain_from_url
-from .adaptive_storage import AdaptiveStorage
+from .storage import AdaptiveStore
 from .stealth import (
     STEALTH_LAUNCH_ARGS,
     STEALTH_INIT_SCRIPT,
@@ -116,11 +117,10 @@ class BrowserController:
                 "max_retries": 3,
                 "retry_delay": 1.0,
                 "enable_adaptive": True,
-                "adaptive_storage_path": None,
             }
             # 稳定性模块（延迟初始化）
             self._selector_generator: Optional[SmartSelectorGenerator] = None
-            self._adaptive_storage: Optional[AdaptiveStorage] = None
+            self._adaptive_storage: Optional[AdaptiveStore] = None
             self._smart_wait: Optional[SmartWait] = None
             self._error_recovery: Optional[ErrorRecovery] = None
             self._retry_wrapper: Optional[RetryWrapper] = None
@@ -158,6 +158,11 @@ class BrowserController:
                     user_agent=DEFAULT_STEALTH_USER_AGENT,
                     locale="en-US",
                     timezone_id="America/New_York",
+                    extra_http_headers={
+                        "Sec-CH-UA": '"Chromium";v="120", "Google Chrome";v="120", "Not_A Brand";v="24"',
+                        "Sec-CH-UA-Mobile": "?0",
+                        "Sec-CH-UA-Platform": '"Windows"',
+                    },
                 )
                 await self._context.add_init_script(STEALTH_INIT_SCRIPT)
             else:
@@ -200,13 +205,14 @@ class BrowserController:
         self._step_counter += 1
         return self._step_counter
 
-    def _get_adaptive_storage(self) -> Optional[AdaptiveStorage]:
-        """Lazy-init adaptive storage when enable_adaptive is True."""
+    def set_adaptive_store(self, store: Optional[AdaptiveStore]) -> None:
+        """Inject adaptive store (e.g. main SQLiteStorage). Used when unified DB."""
+        self._adaptive_storage = store
+
+    def _get_adaptive_storage(self) -> Optional[AdaptiveStore]:
+        """Get adaptive storage: uses injected store (main DB) only. Call set_adaptive_store() to inject."""
         if not self._config.get("enable_adaptive"):
             return None
-        if self._adaptive_storage is None:
-            path = self._config.get("adaptive_storage_path")
-            self._adaptive_storage = AdaptiveStorage(db_path=path)
         return self._adaptive_storage
 
     async def _get_page_state(self, include_html: bool = False) -> PageState:
@@ -226,7 +232,7 @@ class BrowserController:
         if self._config["wait_network_idle"]:
             try:
                 await self._page.wait_for_load_state("networkidle", timeout=10000)
-            except:
+            except Exception:
                 pass  # Timeout is acceptable
 
     def _init_stability_modules(self) -> None:
@@ -436,7 +442,7 @@ class BrowserController:
             if el and auto_save and storage:
                 fp = await extract_fingerprint(el, self._page)
                 if fp:
-                    storage.save(_domain_from_url(self._page.url), ident, fp)
+                    storage.fingerprint_save(_domain_from_url(self._page.url), ident, fp)
             if take_screenshot:
                 screenshot_before = await self._take_screenshot()
             if scroll_into_view:
@@ -556,7 +562,7 @@ class BrowserController:
             if el and auto_save and storage:
                 fp = await extract_fingerprint(el, self._page)
                 if fp:
-                    storage.save(_domain_from_url(self._page.url), ident, fp)
+                    storage.fingerprint_save(_domain_from_url(self._page.url), ident, fp)
             if clear_first:
                 await self._page.locator(selector).clear()
             await self._page.type(selector, text, delay=delay)
@@ -578,7 +584,10 @@ class BrowserController:
                     try:
                         if clear_first:
                             await handle.fill("")
-                        await handle.fill(text)
+                        if delay > 0:
+                            await handle.type(text, delay=delay)
+                        else:
+                            await handle.fill(text)
                         actual_value = await handle.evaluate("el => el.value")
                         if take_screenshot:
                             screenshot = await self._take_screenshot()
@@ -662,7 +671,7 @@ class BrowserController:
             if element and auto_save and storage:
                 fp = await extract_fingerprint(element, self._page)
                 if fp:
-                    storage.save(_domain_from_url(self._page.url), ident, fp)
+                    storage.fingerprint_save(_domain_from_url(self._page.url), ident, fp)
             value = await _get_value_from_el(element)
             screenshot = await self._take_screenshot() if take_screenshot else None
             page_state = await self._get_page_state()
@@ -743,7 +752,7 @@ class BrowserController:
                 if element and auto_save and storage:
                     fp = await extract_fingerprint(element, self._page)
                     if fp:
-                        storage.save(_domain_from_url(self._page.url), ident, fp)
+                        storage.fingerprint_save(_domain_from_url(self._page.url), ident, fp)
                 html = await element.inner_html()
             else:
                 html = await self._page.content()
@@ -879,12 +888,19 @@ class BrowserController:
         error = None
 
         try:
+            if condition in ("selector", "url", "text") and (value is None or value == ""):
+                raise ValueError(f"value is required when condition is {condition}")
+
             if condition == "selector":
                 await self._page.wait_for_selector(value, timeout=timeout)
             elif condition == "url":
                 await self._page.wait_for_url(value, timeout=timeout)
             elif condition == "text":
-                await self._page.wait_for_function(f"document.body.innerText.includes('{value}')", timeout=timeout)
+                # Use json.dumps to safely escape value for JS (prevents injection)
+                safe_value = json.dumps(value)
+                await self._page.wait_for_function(
+                    f"document.body.innerText.includes({safe_value})", timeout=timeout
+                )
             elif condition == "navigation":
                 await self._page.wait_for_load_state("networkidle", timeout=timeout)
             else:

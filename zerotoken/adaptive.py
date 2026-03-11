@@ -188,7 +188,7 @@ async def relocate(
     Find the element on the current page that best matches the stored fingerprint
     for (domain, identifier). Returns the ElementHandle or None if no single best match.
     """
-    stored = storage.load(domain, identifier)
+    stored = storage.fingerprint_load(domain, identifier)
     if not stored:
         return None
     try:

@@ -1,14 +1,69 @@
 """
 ScriptEngine: deterministic replay of scripts without LLM.
 Resolves {{varname}} in params, iterates steps, calls BrowserController, writes SessionStore.
+Depends on ScriptEngineStore (minimal interface) to reduce coupling.
 """
 import re
 import uuid
-from typing import Any, Dict, List, Optional, TYPE_CHECKING, Tuple
+from typing import Any, Dict, List, Optional, Protocol, TYPE_CHECKING, Tuple
 
 if TYPE_CHECKING:
     from zerotoken.controller import BrowserController
-    from zerotoken.storage import SessionStore, DFUStore, SessionRuntimeStore
+
+
+class ScriptEngineStore(Protocol):
+    """
+    Minimal store interface required by ScriptEngine.
+    Reduces coupling: engine depends only on these methods, not the full storage union.
+    """
+
+    def session_start(
+        self,
+        session_id: str,
+        *,
+        task_id: Optional[str] = None,
+        session_type: str = "replay",
+    ) -> None: ...
+
+    def session_append(
+        self,
+        session_id: str,
+        *,
+        step_index: int,
+        action: str,
+        selector: Optional[str] = None,
+        url: Optional[str] = None,
+        payload: Optional[Dict[str, Any]] = None,
+    ) -> None: ...
+
+    def runtime_init(
+        self,
+        session_id: str,
+        *,
+        task_id: Optional[str],
+        cursor_step_index: int,
+        status: str,
+        pause_event: Optional[Dict[str, Any]] = None,
+        vars: Optional[Dict[str, Any]] = None,
+    ) -> None: ...
+
+    def runtime_get(self, session_id: str) -> Optional[Dict[str, Any]]: ...
+
+    def runtime_update(
+        self,
+        session_id: str,
+        *,
+        cursor_step_index: Optional[int] = None,
+        status: Optional[str] = None,
+        pause_event: Any = None,
+        vars: Any = None,
+    ) -> None: ...
+
+    def script_load(self, task_id: str) -> Optional[Dict[str, Any]]: ...
+
+    def dfu_list(self, limit: int = 100) -> List[Dict[str, Any]]: ...
+
+    def dfu_load(self, dfu_id: str) -> Optional[Dict[str, Any]]: ...
 
 PLACEHOLDER_PATTERN = re.compile(r"\{\{(\w+)\}\}")
 
@@ -89,7 +144,9 @@ class ScriptEngine:
         """Return steps with params resolved from self.vars_map."""
         return resolve_params(steps, self.vars_map)
 
-    def _load_all_dfus(self, dfu_store: "DFUStore", limit: int = 200) -> List[Dict[str, Any]]:
+    def _load_all_dfus(
+        self, dfu_store: ScriptEngineStore, limit: int = 200
+    ) -> List[Dict[str, Any]]:
         items = []
         for it in (dfu_store.dfu_list(limit=limit) or []):
             dfu_id = it.get("dfu_id")
@@ -104,12 +161,15 @@ class ScriptEngine:
         self,
         script: Dict[str, Any],
         controller: "BrowserController",
-        store: Any,
+        store: ScriptEngineStore,
         *,
         session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Start-mode entrypoint: create session + runtime, then run from cursor 0.
+
+        If session_id is provided and already exists, session/runtime will be overwritten.
+        Do not pass an existing paused session_id here; use run_script_resume instead.
 
         Returns one of:
         - {"success": True, "status": "success", "session_id": "..."}
@@ -146,7 +206,7 @@ class ScriptEngine:
         session_id: str,
         resolution: Dict[str, Any],
         controller: "BrowserController",
-        store: Any,
+        store: ScriptEngineStore,
     ) -> Dict[str, Any]:
         """
         Resume-mode entrypoint: validate runtime is paused, apply resolution, then continue.
@@ -244,7 +304,7 @@ class ScriptEngine:
         task_id: str,
         steps: List[Dict[str, Any]],
         controller: "BrowserController",
-        store: Any,
+        store: ScriptEngineStore,
         dfus: List[Dict[str, Any]],
         *,
         start_index: int,
@@ -270,7 +330,10 @@ class ScriptEngine:
 
                 if action in ("browser_init", "trajectory_start"):
                     if action == "browser_init":
-                        await controller.start(headless=params.get("headless", True))
+                        await controller.start(
+                            headless=params.get("headless", True),
+                            stealth=params.get("stealth", False),
+                        )
                     step_index += 1
                     store.runtime_update(session_id, cursor_step_index=step_index)
                     continue
@@ -370,6 +433,125 @@ class ScriptEngine:
                         selector=used_selector,
                         url=url_after,
                         payload=params,
+                    )
+                    step_index += 1
+                    store.runtime_update(session_id, cursor_step_index=step_index)
+                    continue
+
+                if action == "browser_get_text":
+                    selectors = _effective_selectors(step)
+                    if not selectors:
+                        raise RuntimeError("browser_get_text requires selector")
+                    attr = params.get("attr") or params.get("attribute", "text")
+                    record = None
+                    used_selector = selectors[0]
+                    for sel in selectors:
+                        used_selector = sel
+                        try:
+                            record = await controller.get_text(sel, attr=attr)
+                            if record and record.result.get("success"):
+                                break
+                        except Exception:
+                            continue
+                    if not record or not record.result.get("success"):
+                        raise RuntimeError("get_text failed")
+                    url_after = getattr(record.page_state, "url", None)
+                    store.session_append(
+                        session_id,
+                        step_index=step_index,
+                        action="get_text",
+                        selector=used_selector,
+                        url=url_after,
+                        payload=params,
+                    )
+                    step_index += 1
+                    store.runtime_update(session_id, cursor_step_index=step_index)
+                    continue
+
+                if action == "browser_get_html":
+                    selectors = _effective_selectors(step)
+                    selector_arg = selectors[0] if selectors else params.get("selector")
+                    record = await controller.get_html(selector=selector_arg)
+                    if not record or not record.result.get("success"):
+                        raise RuntimeError("get_html failed")
+                    url_after = getattr(record.page_state, "url", None)
+                    store.session_append(
+                        session_id,
+                        step_index=step_index,
+                        action="get_html",
+                        selector=selector_arg,
+                        url=url_after,
+                        payload=params,
+                    )
+                    step_index += 1
+                    store.runtime_update(session_id, cursor_step_index=step_index)
+                    continue
+
+                if action == "browser_screenshot":
+                    record = await controller.screenshot(
+                        path=None,
+                        full_page=params.get("full_page", False),
+                        selector=params.get("selector"),
+                    )
+                    if not record or not record.result.get("success"):
+                        raise RuntimeError("screenshot failed")
+                    url_after = getattr(record.page_state, "url", None)
+                    store.session_append(
+                        session_id,
+                        step_index=step_index,
+                        action="screenshot",
+                        selector=params.get("selector"),
+                        url=url_after,
+                        payload={"full_page": params.get("full_page", False)},
+                    )
+                    step_index += 1
+                    store.runtime_update(session_id, cursor_step_index=step_index)
+                    continue
+
+                if action == "browser_wait_for":
+                    condition = params.get("condition")
+                    if not condition:
+                        raise RuntimeError("browser_wait_for requires condition")
+                    value = params.get("value")
+                    if condition in ("selector", "url", "text") and not value:
+                        step_index += 1
+                        store.runtime_update(session_id, cursor_step_index=step_index)
+                        continue
+                    record = await controller.wait_for(
+                        condition,
+                        value=value,
+                        timeout=params.get("timeout"),
+                    )
+                    if not record or not record.result.get("success"):
+                        raise RuntimeError("wait_for failed")
+                    url_after = getattr(record.page_state, "url", None)
+                    store.session_append(
+                        session_id,
+                        step_index=step_index,
+                        action="wait_for",
+                        selector=None,
+                        url=url_after,
+                        payload=params,
+                    )
+                    step_index += 1
+                    store.runtime_update(session_id, cursor_step_index=step_index)
+                    continue
+
+                if action == "browser_extract_data":
+                    schema = params.get("schema")
+                    if not schema:
+                        raise RuntimeError("browser_extract_data requires schema")
+                    record = await controller.extract_data(schema)
+                    if not record or not record.result.get("success"):
+                        raise RuntimeError("extract_data failed")
+                    url_after = getattr(record.page_state, "url", None)
+                    store.session_append(
+                        session_id,
+                        step_index=step_index,
+                        action="extract_data",
+                        selector=None,
+                        url=url_after,
+                        payload={"schema": schema},
                     )
                     step_index += 1
                     store.runtime_update(session_id, cursor_step_index=step_index)
