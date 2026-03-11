@@ -54,7 +54,7 @@ Agent 应按以下顺序处理：
 
 1. 明确告知用户：**ZeroToken MCP 尚未在当前环境安装或启用，暂时无法使用浏览器自动化脚本能力。**
 2. 询问用户当前所用平台（如「Cursor / OpenClaw / 其他支持 MCP 的客户端」），并指导用户安装 ZeroToken 及浏览器依赖：
-   - **OpenClaw + MCPorter**：`mcporter install zerotoken --target openclaw --configure`，然后在 `openclaw.json` 中确认 `mcpServers.zerotoken` 已配置。
+   - **OpenClaw + MCPorter**：`mcporter install zerotoken --target openclaw --configure`。**重要**：OpenClaw 需用 HTTP 模式，先在后台运行 `zerotoken-mcp-http`，再在 `openclaw.json` 中将 `mcpServers.zerotoken` 配置为 `{"url": "http://localhost:8000/mcp"}`（见上文「OpenClaw 使用前准备」）。
    - **如果平台有 MCP Marketplace / 插件市场**：  
      提示用户在市场中搜索并启用 `zerotoken` MCP。
    - **如果是本地 Python 环境（如命令行 / 开发机）**：  
@@ -63,8 +63,8 @@ Agent 应按以下顺序处理：
      2. 安装 Playwright 浏览器依赖（否则浏览器工具会报错）：
         - 普通环境：`playwright install chromium`
         - 如使用 uv：`uv run playwright install chromium --with-deps`
-     3. 启动 MCP Server：在终端运行 `zerotoken-mcp`（安装后提供的命令行入口）
-     4. 在客户端（如 Cursor / OpenClaw）中，将该 MCP server 注册为 id 为 `zerotoken` 的 MCP。
+     3. 启动 MCP Server：**OpenClaw** 在后台运行 `zerotoken-mcp-http`；**Cursor 等 IDE** 运行 `zerotoken-mcp`（或由客户端自动拉起）。
+     4. 在客户端中，将该 MCP server 注册为 id 为 `zerotoken` 的 MCP；OpenClaw 需在 `openclaw.json` 中配置 URL（见「OpenClaw 使用前准备」）。
 3. 在用户确认 ZeroToken 已安装并启用后，Agent 再次从 `browser_init` 开始执行 ZeroToken 相关步骤。
 
 ## MCP 工具与流程
@@ -245,12 +245,13 @@ stealth 模式会启用：启动参数伪装、navigator 指纹伪装、Sec-CH-U
 
 - 工作区：`./skills/zerotoken-openclaw/`（仅当前项目）
 - 本地共享：`~/.openclaw/skills/zerotoken-openclaw/`
-- 或通过 ClawHub：`clawhub install zerotoken-browser`（若已发布）
+- 或通过 ClawHub：`clawhub install zerotoken-openclaw`（若已发布）
 
 从本仓库安装示例：克隆后复制 `skills/zerotoken-openclaw/` 到上述路径之一。
 
 ## 常见坑
 
+- **OpenClaw**：未在后台启动 `zerotoken-mcp-http` 或 `openclaw.json` 仍用 command 而非 url，导致每次调用新建进程、browser 状态丢失。
 - 忘记先调用 `browser_init` 就直接使用 `browser_open` / `browser_click`，导致第一次调用失败或异常。
 - 录制轨迹时未使用 `export_for_ai: true`，后续生成脚本时需要额外处理轨迹数据。
 - `task_id` 在 trajectory 与 script 中不一致，导致 `script_load(task_id)` 找不到对应脚本。
