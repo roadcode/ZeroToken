@@ -450,6 +450,15 @@ zerotoken/
 
 **OpenClaw 配套 Skill**：见 [docs/skills.md](docs/skills.md)，用于定时/重复任务时按轨迹重放、降低 Token 消耗。
 
+## 社区
+
+加入 **ZT Agent Club** QQ 群，一起交流 ZeroToken 与 AI Agent 自动化：
+
+![ZT Agent Club QQ 群二维码](assets/qq-group-qr.png)
+
+- 群号：942359087
+- 扫一扫二维码，加入群聊
+
 ## 参与贡献
 
 欢迎提 Issue 和 PR，详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
