@@ -77,12 +77,9 @@ ZEROTOKEN_HTTP_PORT=8001 zerotoken-mcp-http
 
 将 Skill 放入 OpenClaw 的 skills 目录之一：
 
-- 工作区：`./skills/zerotoken-openclaw/`
-- 本地共享：`~/.openclaw/skills/zerotoken-openclaw/`
+或通过 ClawHub：`clawhub install zerotoken-openclaw`
 
-或通过 ClawHub：`clawhub install zerotoken-openclaw`（若已发布）。
-
-从本仓库复制：
+或从本仓库复制：
 
 ```bash
 cp -r skills/zerotoken-openclaw ~/.openclaw/skills/
